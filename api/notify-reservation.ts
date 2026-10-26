@@ -188,11 +188,9 @@ export default async function handler(req: any, res: any) {
       : `Reservation update · ${booking.reference}`;
     const guestSent = await sendTrackedEmail(String(booking.email), guestEventKey, guestSubject, emailShell(guestTitle, guestIntro, booking, String(room?.image_url || ''), siteUrl));
     const staffEmail = String(env.ADMIN_NOTIFICATION_EMAIL || '').trim().toLowerCase();
-    let staffSent = false;
-    if (event === 'booking_created' && staffEmail) {
-      const staffHtml = emailShell('New reservation request received', `A new guest request is waiting for review. Current status: ${statusLabel}.`, booking, String(room?.image_url || ''), siteUrl);
-      staffSent = await sendTrackedEmail(staffEmail, 'booking_created_staff', `New reservation · ${booking.reference}`, staffHtml);
-    }
+    // Apps Script sends the admin copy as part of the same reservation_created request.
+    // Avoid a second webhook call, which would duplicate the guest and admin emails.
+    const staffSent = event === 'booking_created' && Boolean(staffEmail) ? guestSent : false;
     return res.status(200).json({ configured: true, guestSent, staffSent });
   } catch (error) {
     console.error('Reservation notification failed:', error);
