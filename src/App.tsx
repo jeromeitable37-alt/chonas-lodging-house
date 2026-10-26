@@ -2,8 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { createClient, type Session, type User } from '@supabase/supabase-js';
 import {
   BedDouble,
+  BarChart3,
+  Bell,
   CalendarDays,
+  CalendarRange,
   Check,
+  CheckCircle2,
+  ChevronLeft,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -13,7 +18,9 @@ import {
   DoorOpen,
   Download,
   Filter,
+  History,
   House,
+  Mail,
   Pencil,
   Plus,
   RefreshCw,
@@ -81,6 +88,9 @@ type CurrentUser = {
 };
 type AuthMode = 'login' | 'register' | 'reset' | 'updatePassword' | null;
 type AuthForm = { name: string; email: string; password: string; confirmPassword: string; };
+type BookingReceipt = { reference: string; roomName: string; checkIn: string; checkOut: string; guests: number; total: number; email: string; emailStatus: 'pending' | 'sent' | 'not_configured' | 'failed'; };
+type ActivityLog = { id: number; actor_id: string | null; action: string; entity_type: string; entity_id: string | null; details: Record<string, unknown>; created_at: string; };
+type EmailDeliveryLog = { id: number; booking_id: string; event_key: string; recipient: string; status: 'pending' | 'sent' | 'failed'; provider_id: string | null; error_message: string | null; created_at: string; sent_at: string | null; };
 type RoomEditorForm = {
   id?: number;
   name: string;
@@ -158,12 +168,29 @@ const money = (value: number) =>
   }).format(value);
 const nightsBetween = (start: string, end: string) =>
   Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000);
-const today = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Asia/Manila',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-}).format(new Date());
+const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const dateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+const sendReservationNotification = async (bookingId: string, event: 'booking_created' | 'status_updated'): Promise<{ configured: boolean; guestSent: boolean; staffSent: boolean }> => {
+  if (!supabase) return { configured: false, guestSent: false, staffSent: false };
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return { configured: false, guestSent: false, staffSent: false };
+    const response = await fetch('/api/notify-reservation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ bookingId, event }),
+    });
+    const result = await response.json().catch(() => ({}));
+    return { configured: result.configured === true, guestSent: result.guestSent === true, staffSent: result.staffSent === true };
+  } catch {
+    return { configured: false, guestSent: false, staffSent: false };
+  }
+};
 
 const roomFromRow = (row: any): Room => ({
   id: Number(row.id),
@@ -231,11 +258,22 @@ function App() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('All rooms');
+  const [searchCheckIn, setSearchCheckIn] = useState(today);
+  const [searchCheckOut, setSearchCheckOut] = useState('');
+  const [availabilityQuery, setAvailabilityQuery] = useState<{ checkIn: string; checkOut: string } | null>(null);
+  const [availableRoomIds, setAvailableRoomIds] = useState<number[] | null>(null);
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState('');
   const [bookingRoom, setBookingRoom] = useState<Room | null>(null);
+  const [bookingReceipt, setBookingReceipt] = useState<BookingReceipt | null>(null);
   const [detailRoom, setDetailRoom] = useState<Room | null>(null);
   const [notice, setNotice] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState<'reservations' | 'rooms'>('reservations');
+  const [adminTab, setAdminTab] = useState<'overview' | 'calendar' | 'reservations' | 'rooms' | 'activity'>('overview');
+  const [adminMonth, setAdminMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(today);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [emailLogs, setEmailLogs] = useState<EmailDeliveryLog[]>([]);
   const [statusFilter, setStatusFilter] = useState('All');
   const [guestSearch, setGuestSearch] = useState('');
   const [adminRefreshing, setAdminRefreshing] = useState(false);
@@ -350,6 +388,25 @@ function App() {
     return () => { active = false; };
   }, [currentUser?.id, currentUser?.role]);
 
+  useEffect(() => {
+    if (!supabase || currentUser?.role !== 'admin') {
+      setActivityLogs([]);
+      setEmailLogs([]);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      const [activityResult, emailResult] = await Promise.all([
+        supabase.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(100),
+        supabase.from('email_delivery_logs').select('*').order('created_at', { ascending: false }).limit(50),
+      ]);
+      if (!active) return;
+      if (!activityResult.error) setActivityLogs((activityResult.data || []) as ActivityLog[]);
+      if (!emailResult.error) setEmailLogs((emailResult.data || []) as EmailDeliveryLog[]);
+    })();
+    return () => { active = false; };
+  }, [currentUser?.id, currentUser?.role]);
+
   const visibleRooms = useMemo(
     () =>
       rooms.filter(room => {
@@ -364,10 +421,11 @@ function App() {
           .includes(search.toLowerCase());
         return (
           matchesSearch &&
-          (filterType === 'All rooms' || room.type === filterType)
+          (filterType === 'All rooms' || room.type === filterType) &&
+          (availableRoomIds === null || availableRoomIds.includes(room.id))
         );
       }),
-    [rooms, search, filterType]
+    [rooms, search, filterType, availableRoomIds]
   );
   const activeBookings = bookings.filter(
     b => !['Cancelled', 'Completed'].includes(b.status)
@@ -393,6 +451,23 @@ function App() {
   const myBookings = currentUser
     ? bookings.filter(booking => booking.userId === currentUser.id)
     : [];
+  const pendingBookings = bookings.filter(booking => booking.status === 'Pending');
+  const todaysArrivals = bookings.filter(booking => booking.checkIn === today && booking.status !== 'Cancelled' && booking.status !== 'Completed');
+  const todaysDepartures = bookings.filter(booking => booking.checkOut === today && booking.status !== 'Cancelled' && booking.status !== 'Completed');
+  const upcomingBookings = bookings.filter(booking => booking.checkIn >= today && !['Cancelled', 'Completed'].includes(booking.status)).sort((left, right) => left.checkIn.localeCompare(right.checkIn)).slice(0, 6);
+  const adminCalendarDays = useMemo(() => {
+    const first = new Date(adminMonth.getFullYear(), adminMonth.getMonth(), 1);
+    const startOffset = first.getDay();
+    return Array.from({ length: 42 }, (_, index) => new Date(adminMonth.getFullYear(), adminMonth.getMonth(), 1 - startOffset + index));
+  }, [adminMonth]);
+  const selectedDayBookings = bookings.filter(booking => booking.status !== 'Cancelled' && booking.checkIn <= selectedCalendarDay && booking.checkOut > selectedCalendarDay);
+  const revenueByMonth = useMemo(() => Array.from({ length: 6 }, (_, index) => {
+    const month = new Date(adminMonth.getFullYear(), adminMonth.getMonth() - 5 + index, 1);
+    const key = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
+    const revenue = bookings.filter(booking => booking.checkIn.startsWith(key) && ['Checked in', 'Completed'].includes(booking.status)).reduce((sum, booking) => sum + booking.total, 0);
+    return { key, label: month.toLocaleDateString('en-PH', { month: 'short' }), revenue };
+  }), [bookings, adminMonth]);
+  const maxMonthlyRevenue = Math.max(1, ...revenueByMonth.map(item => item.revenue));
 
   const refreshBookings = async () => {
     if (!supabase || !currentUser) return;
@@ -408,6 +483,41 @@ function App() {
     setView(next);
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const findRoomsForDates = async () => {
+    setAvailabilityError('');
+    if (!searchCheckIn || !searchCheckOut || searchCheckOut <= searchCheckIn || searchCheckIn < today) {
+      setAvailabilityError('Choose a valid check-in date and a check-out date at least one day later.');
+      return;
+    }
+    if (!supabase) {
+      setAvailabilityError('Live availability requires the database connection. You can still browse the room photos.');
+      go('rooms');
+      return;
+    }
+    setAvailabilityBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('get_available_room_ids', { p_check_in: searchCheckIn, p_check_out: searchCheckOut });
+      if (error) throw error;
+      const ids = (data || []).map((row: { room_id: number | string }) => Number(row.room_id));
+      setAvailableRoomIds(ids);
+      setAvailabilityQuery({ checkIn: searchCheckIn, checkOut: searchCheckOut });
+      go('rooms');
+      setNotice(ids.length ? `${ids.length} room option(s) available for your selected dates.` : 'No rooms are available for those dates. Try another date range.');
+    } catch {
+      setAvailabilityError('We could not check live availability. Please try again or choose dates in the reservation form.');
+    } finally {
+      setAvailabilityBusy(false);
+    }
+  };
+  const refreshAdminLogs = async () => {
+    if (!supabase || !isAdmin) return;
+    const [activityResult, emailResult] = await Promise.all([
+      supabase.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(100),
+      supabase.from('email_delivery_logs').select('*').order('created_at', { ascending: false }).limit(50),
+    ]);
+    if (!activityResult.error) setActivityLogs((activityResult.data || []) as ActivityLog[]);
+    if (!emailResult.error) setEmailLogs((emailResult.data || []) as EmailDeliveryLog[]);
   };
   const openAuth = (mode: Exclude<AuthMode, null>) => {
     setAuthMode(mode);
@@ -528,8 +638,8 @@ function App() {
       guest: currentUser.name || '',
       email: currentUser.email || '',
       phone: '',
-      checkIn: today,
-      checkOut: '',
+      checkIn: availabilityQuery?.checkIn || today,
+      checkOut: availabilityQuery?.checkOut || '',
       guests: String(Math.min(2, room.guests)),
     });
     setBookingRoom(room);
@@ -581,10 +691,22 @@ function App() {
         return;
       }
       const reference = data?.reference ? String(data.reference) : 'submitted';
-      await refreshBookings();
+      const receipt: BookingReceipt = {
+        reference, roomName: bookingRoom.name, checkIn: form.checkIn, checkOut: form.checkOut,
+        guests: Number(form.guests), total: Number(data?.total ?? selectedTotal),
+        email: form.email.trim(), emailStatus: 'pending',
+      };
       setBookingRoom(null);
-      setNotice('Reservation request submitted successfully. Reference: ' + reference + '. It is pending confirmation.');
+      setBookingReceipt(receipt);
       go('mybookings');
+      let emailResult = { configured: false, guestSent: false, staffSent: false };
+      if (data?.id) emailResult = await sendReservationNotification(String(data.id), 'booking_created');
+      setBookingReceipt(current => current?.reference === reference
+        ? { ...current, emailStatus: emailResult.guestSent ? 'sent' : emailResult.configured ? 'failed' : 'not_configured' }
+        : current);
+      try { await refreshBookings(); } catch { /* Booking was saved; keep the receipt available. */ }
+      await refreshAdminLogs();
+      setNotice('Reservation request saved. Reference: ' + reference + '. Status: pending confirmation.');
     } catch {
       setNotice('We could not refresh the reservation list. Your request may have been accepted; refresh before trying again.');
     } finally {
@@ -600,7 +722,13 @@ function App() {
       const { error } = await supabase.from('bookings').update({ status }).eq('id', id);
       if (error) throw error;
       await refreshBookings();
-      setNotice('Reservation status updated.');
+      await refreshAdminLogs();
+      const emailResult = await sendReservationNotification(id, 'status_updated');
+      setNotice(emailResult.guestSent
+        ? 'Reservation status updated and guest email sent.'
+        : emailResult.configured
+          ? 'Reservation status updated, but the guest email could not be sent. Check email delivery logs.'
+          : 'Reservation status updated. Email notifications still need to be configured.');
     } catch {
       setNotice('Unable to update reservation. Verify the admin account and try again.');
     }
@@ -724,6 +852,12 @@ function App() {
       if (bookingResult.error) throw bookingResult.error;
       setRooms((roomResult.data || []).map(roomFromRow));
       setBookings((bookingResult.data || []).map(bookingFromRow));
+      const [activityResult, emailResult] = await Promise.all([
+        supabase.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(100),
+        supabase.from('email_delivery_logs').select('*').order('created_at', { ascending: false }).limit(50),
+      ]);
+      if (!activityResult.error) setActivityLogs((activityResult.data || []) as ActivityLog[]);
+      if (!emailResult.error) setEmailLogs((emailResult.data || []) as EmailDeliveryLog[]);
       setNotice('Dashboard data refreshed.');
     } catch {
       setNotice('Could not refresh dashboard data. Check the database connection and admin permissions.');
@@ -894,27 +1028,20 @@ function App() {
               </div>
             </div>
             <div className="search-field">
-              <label htmlFor="home-type">ROOM TYPE</label>
-              <div>
-                <BedDouble size={16} />
-                <select
-                  id="home-type"
-                  value={filterType}
-                  onChange={e => setFilterType(e.target.value)}
-                >
-                  <option>All rooms</option>
-                  {Array.from(new Set(rooms.map(r => r.type))).map(type => (
-                    <option key={type}>{type}</option>
-                  ))}
-                </select>
-                <ChevronDown size={14} />
-              </div>
+              <label htmlFor="home-checkin">CHECK-IN</label>
+              <div><CalendarDays size={16} /><input id="home-checkin" type="date" min={today} value={searchCheckIn} onChange={event => { setSearchCheckIn(event.target.value); setAvailabilityError(''); setAvailableRoomIds(null); }} /></div>
             </div>
-            <button
-              className="button button-primary search-submit"
-              onClick={() => go('rooms')}
-            >
-              Find a room <ChevronRight size={16} />
+            <div className="search-field">
+              <label htmlFor="home-checkout">CHECK-OUT</label>
+              <div><CalendarDays size={16} /><input id="home-checkout" type="date" min={searchCheckIn || today} value={searchCheckOut} onChange={event => { setSearchCheckOut(event.target.value); setAvailabilityError(''); setAvailableRoomIds(null); }} /></div>
+            </div>
+            <div className="search-field">
+              <label htmlFor="home-type">ROOM TYPE</label>
+              <div><BedDouble size={16} /><select id="home-type" value={filterType} onChange={e => setFilterType(e.target.value)}><option>All rooms</option>{Array.from(new Set(rooms.map(r => r.type))).map(type => <option key={type}>{type}</option>)}</select><ChevronDown size={14} /></div>
+            </div>
+            {availabilityError && <p className="availability-error">{availabilityError}</p>}
+            <button className="button button-primary search-submit" onClick={() => void findRoomsForDates()} disabled={availabilityBusy}>
+              {availabilityBusy ? 'Checking…' : 'Check availability'} {!availabilityBusy && <ChevronRight size={16} />}
             </button>
           </section>
           <section className="section section-rooms">
@@ -1009,6 +1136,7 @@ function App() {
             </p>
           </div>
           {dataLoading && <div className="rooms-loading" role="status"><span className="loading-spinner" /> Loading available rooms…</div>}
+          {availabilityQuery && <div className="availability-result-bar"><span><CalendarRange size={16} /> Showing availability from <strong>{availabilityQuery.checkIn}</strong> to <strong>{availabilityQuery.checkOut}</strong></span><button type="button" onClick={() => { setAvailabilityQuery(null); setAvailableRoomIds(null); setSearchCheckOut(''); }}>Clear dates <X size={13} /></button></div>}
           <div className="listing-tools">
             <div className="listing-search">
               <Search size={17} />
@@ -1073,7 +1201,7 @@ function App() {
             <h1>
               My <em>reservations.</em>
             </h1>
-            <p>Review reservation requests linked to your account.</p>
+            <p>Review your reservation status, reference number, and stay details in one place.</p>
           </div>
           {!currentUser ? (
             <div className="empty-state auth-bookings-prompt">
@@ -1101,14 +1229,17 @@ function App() {
                       Reference: <strong>{b.reference}</strong> · {b.guest}
                     </p>
                     <div className="booking-meta">
-                      <span>
-                        <CalendarDays size={14} /> {b.checkIn} → {b.checkOut}
-                      </span>
-                      <span>
-                        <Users size={14} /> {b.guests} guest
-                        {b.guests > 1 ? 's' : ''}
-                      </span>
+                      <span><CalendarDays size={14} /> {b.checkIn} → {b.checkOut}</span>
+                      <span><Users size={14} /> {b.guests} guest{b.guests > 1 ? 's' : ''}</span>
                     </div>
+                    {b.status === 'Cancelled' ? <div className="booking-cancelled-note">This reservation has been cancelled.</div> : (
+                      <div className="booking-timeline" aria-label={'Reservation status: ' + b.status}>
+                        {(['Pending', 'Confirmed', 'Checked in', 'Completed'] as const).map((stage, index) => {
+                          const currentStage = ['Pending', 'Confirmed', 'Checked in', 'Completed'].indexOf(b.status);
+                          return <div key={stage} className={index <= currentStage ? 'timeline-stage reached' : 'timeline-stage'}><span>{index < currentStage ? <Check size={10} /> : index + 1}</span><small>{stage}</small></div>;
+                        })}
+                      </div>
+                    )}
                   </div>
                   <div className="booking-total">
                     <small>ESTIMATED TOTAL</small>
@@ -1195,177 +1326,65 @@ function App() {
             />
           </div>
           <div className="admin-workspace">
-            <div className="admin-tabs">
-              <button
-                className={
-                  adminTab === 'reservations'
-                    ? 'admin-tab selected'
-                    : 'admin-tab'
-                }
-                onClick={() => setAdminTab('reservations')}
-              >
-                Reservations <span>{bookings.length}</span>
-              </button>
-              <button
-                className={
-                  adminTab === 'rooms' ? 'admin-tab selected' : 'admin-tab'
-                }
-                onClick={() => setAdminTab('rooms')}
-              >
-                Room listings <span>{rooms.length}</span>
-              </button>
+            <div className="admin-tabs admin-tabs-enhanced">
+              <button className={adminTab === 'overview' ? 'admin-tab selected' : 'admin-tab'} onClick={() => setAdminTab('overview')}><BarChart3 size={14} /> Overview</button>
+              <button className={adminTab === 'calendar' ? 'admin-tab selected' : 'admin-tab'} onClick={() => setAdminTab('calendar')}><CalendarRange size={14} /> Calendar</button>
+              <button className={adminTab === 'reservations' ? 'admin-tab selected' : 'admin-tab'} onClick={() => setAdminTab('reservations')}><ClipboardList size={14} /> Reservations <span>{bookings.length}</span>{pendingBookings.length > 0 && <i className="pending-count">{pendingBookings.length}</i>}</button>
+              <button className={adminTab === 'rooms' ? 'admin-tab selected' : 'admin-tab'} onClick={() => setAdminTab('rooms')}><BedDouble size={14} /> Rooms <span>{rooms.length}</span></button>
+              <button className={adminTab === 'activity' ? 'admin-tab selected' : 'admin-tab'} onClick={() => setAdminTab('activity')}><History size={14} /> Activity</button>
             </div>
-            {adminTab === 'reservations' ? (
+            {adminTab === 'overview' ? (
+              <section className="admin-overview-panel">
+                <div className="admin-today-grid">
+                  <article className="admin-today-card"><span className="admin-today-icon"><DoorOpen size={18} /></span><div><small>Arrivals today</small><strong>{todaysArrivals.length}</strong><span>{todaysArrivals.length ? todaysArrivals.map(b => b.guest).slice(0,2).join(', ') : 'No arrivals scheduled'}</span></div></article>
+                  <article className="admin-today-card"><span className="admin-today-icon"><CalendarDays size={18} /></span><div><small>Departures today</small><strong>{todaysDepartures.length}</strong><span>{todaysDepartures.length ? todaysDepartures.map(b => b.guest).slice(0,2).join(', ') : 'No departures scheduled'}</span></div></article>
+                  <article className="admin-today-card"><span className="admin-today-icon"><Bell size={18} /></span><div><small>Needs attention</small><strong>{pendingBookings.length}</strong><span>Pending reservation requests</span></div></article>
+                </div>
+                <div className="admin-overview-grid">
+                  <section className="admin-panel-card"><div className="admin-panel-heading"><div><span className="eyebrow"><span /> PERFORMANCE</span><h3>Recorded revenue</h3><p>Checked-in and completed reservations</p></div></div>
+                    <div className="revenue-chart">{revenueByMonth.map(month => <div className="revenue-column" key={month.key} title={month.key + ': ' + money(month.revenue)}><strong>{month.revenue > 0 ? money(month.revenue) : '—'}</strong><div className="revenue-bar-track"><span style={{height: Math.max(4, month.revenue / maxMonthlyRevenue * 100) + '%'}} /></div><small>{month.label}</small></div>)}</div>
+                  </section>
+                  <section className="admin-panel-card"><div className="admin-panel-heading"><div><span className="eyebrow"><span /> NEXT UP</span><h3>Upcoming arrivals</h3><p>Your next guest stays</p></div><button className="text-link" type="button" onClick={() => setAdminTab('calendar')}>View calendar <ChevronRight size={14} /></button></div>
+                    {upcomingBookings.length ? <div className="upcoming-list">{upcomingBookings.map(booking => <article className="upcoming-row" key={booking.id}><div className="upcoming-date"><strong>{new Date(booking.checkIn + 'T12:00:00').getDate()}</strong><small>{new Date(booking.checkIn + 'T12:00:00').toLocaleDateString('en-PH',{month:'short'})}</small></div><div className="upcoming-details"><strong>{booking.guest}</strong><small>{booking.roomName} · {booking.checkIn} → {booking.checkOut}</small></div><StatusPill status={booking.status} /></article>)}</div> : <div className="admin-mini-empty"><CalendarDays size={20} /><p>No upcoming arrivals yet. New bookings will appear here.</p></div>}
+                  </section>
+                </div>
+                <section className="admin-panel-card recent-activity-card"><div className="admin-panel-heading"><div><span className="eyebrow"><span /> RECENT CHANGES</span><h3>Activity feed</h3></div><button className="text-link" type="button" onClick={() => setAdminTab('activity')}>View activity <ChevronRight size={14} /></button></div>
+                  {activityLogs.length ? <div className="activity-list">{activityLogs.slice(0,5).map(item => <article className="activity-row" key={item.id}><span className="activity-icon"><History size={15} /></span><div><strong>{item.action.replaceAll('_',' ')}</strong><small>{String(item.details?.reference || item.details?.room_name || item.entity_type)}</small></div><time>{new Date(item.created_at).toLocaleString('en-PH',{dateStyle:'medium',timeStyle:'short'})}</time></article>)}</div> : <div className="admin-mini-empty"><History size={20} /><p>Actions will appear here as reservations and room details change.</p></div>}
+                </section>
+              </section>
+            ) : adminTab === 'calendar' ? (
+              <section className="admin-calendar-panel">
+                <div className="calendar-toolbar"><div><span className="eyebrow"><span /> ROOM OCCUPANCY</span><h3>{adminMonth.toLocaleDateString('en-PH',{month:'long',year:'numeric'})}</h3><p>Booked nights are marked on each date. Cancelled requests are excluded.</p></div><div className="calendar-month-controls"><button className="icon-button" type="button" aria-label="Previous month" onClick={() => setAdminMonth(month => new Date(month.getFullYear(),month.getMonth()-1,1))}><ChevronLeft size={16} /></button><button className="icon-button" type="button" aria-label="Next month" onClick={() => setAdminMonth(month => new Date(month.getFullYear(),month.getMonth()+1,1))}><ChevronRight size={16} /></button><button className="button button-outline" type="button" onClick={() => {const current = new Date();setAdminMonth(new Date(current.getFullYear(),current.getMonth(),1));setSelectedCalendarDay(today);}}>Today</button></div></div>
+                <div className="calendar-grid">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day => <div className="calendar-weekday" key={day}>{day}</div>)}{adminCalendarDays.map(date => { const key = dateKey(date); const dayBookings = bookings.filter(booking => booking.status !== 'Cancelled' && booking.checkIn <= key && booking.checkOut > key); return <button type="button" key={key} className={'calendar-day' + (date.getMonth() === adminMonth.getMonth() ? ' current-month' : ' other-month') + (key === selectedCalendarDay ? ' selected-day' : '') + (key === today ? ' today-day' : '')} onClick={() => setSelectedCalendarDay(key)}><span className="calendar-day-number">{date.getDate()}</span>{dayBookings.slice(0,2).map(booking => <span key={booking.id} className={'calendar-booking-chip status-chip-' + booking.status.toLowerCase().replaceAll(' ','-')} title={booking.guest + ' · ' + booking.roomName}>{booking.guest}</span>)}{dayBookings.length > 2 && <small className="calendar-more">+{dayBookings.length-2} more</small>}</button>; })}</div>
+                <div className="calendar-selected-details"><div className="admin-panel-heading"><div><span className="eyebrow"><span /> SELECTED DATE</span><h3>{new Date(selectedCalendarDay + 'T12:00:00').toLocaleDateString('en-PH',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</h3></div><span className="result-count">{selectedDayBookings.length} booking(s)</span></div>
+                  {selectedDayBookings.length ? selectedDayBookings.map(booking => <article className="calendar-detail-row" key={booking.id}><div><strong>{booking.guest}</strong><small>{booking.reference} · {booking.roomName}</small><small>{booking.checkIn} → {booking.checkOut}</small></div><StatusPill status={booking.status} /><strong>{money(booking.total)}</strong></article>) : <div className="admin-mini-empty"><CalendarDays size={20} /><p>No active reservations covering this date.</p></div>}
+                </div>
+              </section>
+            ) : adminTab === 'reservations' ? (
               <>
-                <div className="admin-toolbar">
-                  <div className="listing-search">
-                    <Search size={16} />
-                    <input
-                      placeholder="Search guest or room..."
-                      value={guestSearch}
-                      onChange={e => setGuestSearch(e.target.value)}
-                    />
-                  </div>
-                  <select
-                    className="status-select"
-                    value={statusFilter}
-                    onChange={e => setStatusFilter(e.target.value)}
-                  >
-                    {[
-                      'All',
-                      'Pending',
-                      'Confirmed',
-                      'Checked in',
-                      'Completed',
-                      'Cancelled',
-                    ].map(s => (
-                      <option key={s}>{s}</option>
-                    ))}
-                  </select>
-                  <div className="admin-toolbar-actions">
-                    <button className="button button-outline admin-tool-button" type="button" onClick={() => void refreshAdminDashboard()} disabled={adminRefreshing}>
-                      <RefreshCw size={14} className={adminRefreshing ? 'spin-icon' : ''} /> {adminRefreshing ? 'Refreshing…' : 'Refresh'}
-                    </button>
-                    <button className="button button-primary admin-tool-button" type="button" onClick={exportBookings} disabled={!filteredBookings.length}>
-                      <Download size={14} /> Export CSV
-                    </button>
-                  </div>
+                <div className="admin-toolbar"><div className="listing-search"><Search size={16} /><input placeholder="Search guest, email, reference or room..." value={guestSearch} onChange={event => setGuestSearch(event.target.value)} /></div>
+                  <select className="status-select" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>{['All','Pending','Confirmed','Checked in','Completed','Cancelled'].map(status => <option key={status}>{status}</option>)}</select>
+                  <div className="admin-toolbar-actions"><button className="button button-outline admin-tool-button" type="button" onClick={() => void refreshAdminDashboard()} disabled={adminRefreshing}><RefreshCw size={14} className={adminRefreshing ? 'spin-icon' : ''} /> {adminRefreshing ? 'Refreshing…' : 'Refresh'}</button><button className="button button-primary admin-tool-button" type="button" onClick={exportBookings} disabled={!filteredBookings.length}><Download size={14} /> Export CSV</button></div>
                 </div>
-                <div className="table-scroll">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>GUEST / REFERENCE</th>
-                        <th>ROOM & DATES</th>
-                        <th>TOTAL</th>
-                        <th>STATUS</th>
-                        <th>ACTIONS</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredBookings.map(b => (
-                        <tr key={b.id}>
-                          <td>
-                            <strong>{b.guest}</strong>
-                            <small>{b.reference}</small>
-                            <small>{b.email}</small>
-                          </td>
-                          <td>
-                            <strong>{b.roomName}</strong>
-                            <small>
-                              {b.checkIn} → {b.checkOut}
-                            </small>
-                            <small>{b.guests} guest(s)</small>
-                          </td>
-                          <td className="table-total">{money(b.total)}</td>
-                          <td>
-                            <StatusPill status={b.status} />
-                          </td>
-                          <td>
-                            <select
-                              aria-label={'Update status for ' + b.id}
-                              className="row-status"
-                              value={b.status}
-                              onChange={e =>
-                                updateStatus(
-                                  b.id,
-                                  e.target.value as Booking['status']
-                                )
-                              }
-                            >
-                              {[
-                                'Pending',
-                                'Confirmed',
-                                'Checked in',
-                                'Completed',
-                                'Cancelled',
-                              ].map(s => (
-                                <option key={s}>{s}</option>
-                              ))}
-                            </select>
-                            <button
-                              className="icon-button danger"
-                              title="Cancel reservation" aria-label="Cancel reservation"
-                              onClick={() => deleteBooking(b.id)}
-                            >
-                              <X size={16} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {filteredBookings.length === 0 && (
-                  <div className="table-empty admin-empty-state">
-                    <span className="admin-empty-icon"><ClipboardList size={24} /></span>
-                    <h3>{bookings.length === 0 ? 'No reservations yet' : 'No matching reservations'}</h3>
-                    <p>{bookings.length === 0
-                      ? 'New guest requests will appear here. Room listings are ready for guests to browse and reserve.'
-                      : 'Try clearing the guest search or choosing a different booking status.'}</p>
-                    {bookings.length === 0
-                      ? <button className="button button-outline" type="button" onClick={() => setAdminTab('rooms')}>Review room listings <ChevronRight size={15} /></button>
-                      : <button className="button button-outline" type="button" onClick={() => { setGuestSearch(''); setStatusFilter('All'); }}>Clear filters</button>}
-                  </div>
-                )}
+                <div className="table-scroll"><table className="data-table"><thead><tr><th>GUEST / REFERENCE</th><th>ROOM & DATES</th><th>TOTAL</th><th>STATUS</th><th>ACTIONS</th></tr></thead>
+                  <tbody>{filteredBookings.map(booking => <tr key={booking.id}><td><strong>{booking.guest}</strong><small>{booking.reference}</small><small>{booking.email}</small><small>{booking.phone}</small></td><td><strong>{booking.roomName}</strong><small>{booking.checkIn} → {booking.checkOut}</small><small>{booking.guests} guest(s)</small></td><td className="table-total">{money(booking.total)}</td><td><StatusPill status={booking.status} /></td><td><select aria-label={'Update status for ' + booking.reference} className="row-status" value={booking.status} onChange={event => updateStatus(booking.id,event.target.value as Booking['status'])}>{['Pending','Confirmed','Checked in','Completed','Cancelled'].map(status => <option key={status}>{status}</option>)}</select><button className="icon-button danger" type="button" title="Cancel reservation" aria-label="Cancel reservation" onClick={() => deleteBooking(booking.id)}><X size={16} /></button></td></tr>)}</tbody>
+                </table></div>
+                {filteredBookings.length === 0 && <div className="table-empty admin-empty-state"><span className="admin-empty-icon"><ClipboardList size={24} /></span><h3>{bookings.length === 0 ? 'No reservations yet' : 'No matching reservations'}</h3><p>{bookings.length === 0 ? 'New guest requests will appear here. Browse the calendar and room listings while you wait.' : 'Try clearing the guest search or choosing a different booking status.'}</p>{bookings.length === 0 ? <button className="button button-outline" type="button" onClick={() => setAdminTab('rooms')}>Review room listings <ChevronRight size={15} /></button> : <button className="button button-outline" type="button" onClick={() => {setGuestSearch('');setStatusFilter('All');}}>Clear filters</button>}</div>}
+              </>
+            ) : adminTab === 'rooms' ? (
+              <>
+                <div className="rooms-admin-toolbar"><p>Room rates are per night. Edit the details guests see before they reserve.</p><button className="button button-primary" type="button" onClick={openNewRoom}><Plus size={15} /> Add room</button></div>
+                <div className="room-admin-list">{rooms.map(room => <div className="room-admin-row" key={room.id}><img src={room.image} alt="" /><div><strong>{room.name}</strong><small>{room.type} · up to {room.guests} guest(s)</small></div><strong>{money(room.price)}<small>/night</small></strong><div className="room-admin-actions"><button className="icon-button" type="button" title={'Edit ' + room.name} aria-label={'Edit ' + room.name} onClick={() => openEditRoom(room)}><Pencil size={15} /></button><button className="icon-button danger" type="button" title={'Remove ' + room.name} aria-label={'Remove ' + room.name} onClick={() => deleteRoom(room.id)}><X size={16} /></button></div></div>)}</div>
               </>
             ) : (
-              <>
-                <div className="rooms-admin-toolbar">
-                  <p>
-                    Room rates are per night. Add a room or remove a listing.
-                  </p>
-                  <button className="button button-primary" type="button" onClick={openNewRoom}>
-                    <Plus size={15} /> Add room
-                  </button>
-                </div>
-                <div className="room-admin-list">
-                  {rooms.map(room => (
-                    <div className="room-admin-row" key={room.id}>
-                      <img src={room.image} alt="" />
-                      <div>
-                        <strong>{room.name}</strong>
-                        <small>
-                          {room.type} · up to {room.guests} guest(s)
-                        </small>
-                      </div>
-                      <strong>
-                        {money(room.price)}
-                        <small>/night</small>
-                      </strong>
-                      <div className="room-admin-actions">
-                        <button className="icon-button" type="button" title={'Edit ' + room.name} aria-label={'Edit ' + room.name} onClick={() => openEditRoom(room)}>
-                          <Pencil size={15} />
-                        </button>
-                        <button className="icon-button danger" type="button" title={'Remove ' + room.name} aria-label={'Remove ' + room.name} onClick={() => deleteRoom(room.id)}>
-                          <X size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
+              <section className="admin-activity-panel">
+                <div className="activity-section-heading"><div><span className="eyebrow"><span /> AUDIT TRAIL</span><h3>Recent activity</h3><p>Room edits and reservation status changes are recorded here.</p></div><button type="button" className="button button-outline admin-tool-button" onClick={() => void refreshAdminDashboard()} disabled={adminRefreshing}><RefreshCw size={14} /> Refresh activity</button></div>
+                {activityLogs.length ? <div className="activity-list">{activityLogs.map(item => <article className="activity-row" key={item.id}><span className="activity-icon"><History size={15} /></span><div><strong>{item.action.replaceAll('_',' ')}</strong><small>{String(item.details?.reference || item.details?.room_name || item.entity_id || item.entity_type)}</small></div><time>{new Date(item.created_at).toLocaleString('en-PH',{dateStyle:'medium',timeStyle:'short'})}</time></article>)}</div> : <div className="admin-mini-empty"><History size={20} /><p>No logged actions yet. Reservation and room updates will appear here after the activity migration is applied.</p></div>}
+                <div className="activity-section-heading email-log-heading"><div><span className="eyebrow"><span /> TRANSACTIONAL EMAIL</span><h3>Email delivery history</h3><p>Only configured email attempts appear in this log.</p></div></div>
+                {emailLogs.length ? <div className="email-log-list">{emailLogs.map(log => <article className="email-log-row" key={log.id}><span className={'email-log-status ' + log.status}><Mail size={15} /></span><div><strong>{log.event_key.replaceAll('_',' ')}</strong><small>To: {log.recipient}</small>{log.error_message && <small className="email-log-error">{log.error_message}</small>}</div><div><StatusPill status={log.status === 'sent' ? 'Completed' : log.status === 'failed' ? 'Cancelled' : 'Pending'} /><small>{new Date(log.created_at).toLocaleString('en-PH',{dateStyle:'medium',timeStyle:'short'})}</small></div></article>)}</div> : <div className="admin-mini-empty"><Mail size={20} /><p>Email delivery status appears here after email configuration and first reservation.</p></div>}
+              </section>
             )}
+
           </div>
           <div className="admin-footer-note">
             <ShieldCheck size={15} />
@@ -1415,6 +1434,24 @@ function App() {
           >
             <X size={16} />
           </button>
+        </div>
+      )}
+      {bookingReceipt && (
+        <div className="modal-backdrop receipt-backdrop">
+          <section className="modal booking-receipt-modal" role="dialog" aria-modal="true" aria-label="Reservation request confirmation">
+            <button className="modal-close" type="button" onClick={() => setBookingReceipt(null)} aria-label="Close confirmation"><X /></button>
+            <div className="receipt-success-mark"><CheckCircle2 size={36} /></div>
+            <div className="eyebrow receipt-eyebrow"><span /> RESERVATION REQUEST RECEIVED</div>
+            <h2>Thank you for your <em>booking request.</em></h2>
+            <p className="receipt-intro">Your request is saved. The lodging staff will review it before it is confirmed.</p>
+            <div className="receipt-reference"><small>RESERVATION REFERENCE</small><strong>{bookingReceipt.reference}</strong><button type="button" onClick={() => { void navigator.clipboard?.writeText(bookingReceipt.reference); setNotice('Reservation reference copied.'); }}>Copy reference</button></div>
+            <div className="receipt-details">
+              <div><small>ROOM</small><strong>{bookingReceipt.roomName}</strong></div><div><small>CHECK-IN</small><strong>{bookingReceipt.checkIn}</strong></div><div><small>CHECK-OUT</small><strong>{bookingReceipt.checkOut}</strong></div><div><small>GUESTS</small><strong>{bookingReceipt.guests}</strong></div>
+              <div className="receipt-total"><small>ESTIMATED TOTAL</small><strong>{money(bookingReceipt.total)}</strong><span>{nightsBetween(bookingReceipt.checkIn, bookingReceipt.checkOut)} night(s)</span></div>
+            </div>
+            <div className={'receipt-email-state ' + bookingReceipt.emailStatus}><Mail size={17} /><div><strong>{bookingReceipt.emailStatus === 'sent' ? 'Confirmation email sent' : bookingReceipt.emailStatus === 'pending' ? 'Checking email delivery…' : bookingReceipt.emailStatus === 'failed' ? 'Booking saved; email needs attention' : 'Email confirmation not configured yet'}</strong><small>{bookingReceipt.emailStatus === 'sent' ? 'A request receipt was sent to ' + bookingReceipt.email + '.' : bookingReceipt.emailStatus === 'failed' ? 'Your booking is saved. The lodging staff can still see it; the notification could not be delivered.' : bookingReceipt.emailStatus === 'pending' ? 'We are checking the notification service.' : 'Keep your reservation reference. The booking is saved, but email delivery needs the sending service setup.'}</small></div></div>
+            <div className="receipt-actions"><button className="button button-outline" type="button" onClick={() => { setBookingReceipt(null); go('rooms'); }}>Browse rooms</button><button className="button button-primary" type="button" onClick={() => { setBookingReceipt(null); go('mybookings'); }}>View my reservation <ChevronRight size={16} /></button></div>
+          </section>
         </div>
       )}
       {roomEditor && (
