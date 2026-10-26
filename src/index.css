@@ -1041,6 +1041,46 @@ h2 em {
   font-size: 9px;
   color: #536b59;
 }
+.reservation-row-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 138px;
+}
+.reservation-quick-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  box-shadow: 0 3px 10px rgba(37, 75, 54, 0.12);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+.reservation-quick-action:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(37, 75, 54, 0.18);
+}
+.reservation-secondary-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.reservation-secondary-actions .icon-button {
+  flex: 0 0 auto;
+}
+.data-table tbody tr:hover {
+  background: #fbfcf8;
+}
+.data-table tbody tr {
+  transition: background 160ms ease;
+}
 .icon-button {
   border: 1px solid #e7e8e1;
   background: white;
