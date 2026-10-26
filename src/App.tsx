@@ -15,6 +15,10 @@ import {
   Mail,
   MapPin,
   Menu,
+  LogIn,
+  LogOut,
+  UserPlus,
+  UserRound,
   Phone,
   Search,
   ShieldCheck,
@@ -50,7 +54,12 @@ type Booking = {
   total: number;
   status: 'Pending' | 'Confirmed' | 'Checked in' | 'Completed' | 'Cancelled';
   createdAt: string;
+  userId?: string;
 };
+type Account = { id: string; name: string; email: string; salt: string; passwordHash: string; createdAt: string; };
+type CurrentUser = Pick<Account, 'id' | 'name' | 'email'>;
+type AuthMode = 'login' | 'register' | null;
+type AuthForm = { name: string; email: string; password: string; confirmPassword: string; };
 const seedRooms: Room[] = [
   {
     id: 1,
@@ -125,6 +134,12 @@ const readStorage = <T,>(key: string, fallback: T): T => {
 };
 const nightsBetween = (start: string, end: string) =>
   Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000);
+const hashPassword = async (password: string, salt: string) => {
+  const data = new TextEncoder().encode(salt + ':' + password);
+  const digest = await window.crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+};
+const createPasswordSalt = () => Array.from(window.crypto.getRandomValues(new Uint8Array(16))).map(byte => byte.toString(16).padStart(2, '0')).join('');
 const today = new Date().toISOString().slice(0, 10);
 
 function App() {
@@ -137,6 +152,12 @@ function App() {
   const [view, setView] = useState<'home' | 'rooms' | 'mybookings' | 'admin'>(
     'home'
   );
+  const [users, setUsers] = useState<Account[]>(() => readStorage('chona-users', []));
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readStorage('chona-session', null));
+  const [authMode, setAuthMode] = useState<AuthMode>(null);
+  const [authForm, setAuthForm] = useState<AuthForm>({ name: '', email: '', password: '', confirmPassword: '' });
+  const [authError, setAuthError] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('All rooms');
   const [bookingRoom, setBookingRoom] = useState<Room | null>(null);
@@ -163,6 +184,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem('chona-bookings', JSON.stringify(bookings));
   }, [bookings]);
+  useEffect(() => { localStorage.setItem('chona-users', JSON.stringify(users)); }, [users]);
+  useEffect(() => {
+    if (currentUser) localStorage.setItem('chona-session', JSON.stringify(currentUser));
+    else localStorage.removeItem('chona-session');
+  }, [currentUser]);
   useEffect(() => {
     if (!notice) return;
     const id = window.setTimeout(() => setNotice(''), 4200);
@@ -209,15 +235,67 @@ function App() {
         .includes(guestSearch.toLowerCase())
   );
 
+  const myBookings = currentUser ? bookings.filter(b => b.userId === currentUser.id || (!b.userId && b.email.toLowerCase() === currentUser.email.toLowerCase())) : [];
+
   const go = (next: typeof view) => {
     setView(next);
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+  const openAuth = (mode: Exclude<AuthMode, null>) => {
+    setAuthMode(mode);
+    setAuthError('');
+    setAuthForm({ name: currentUser?.name || '', email: currentUser?.email || '', password: '', confirmPassword: '' });
+    setMenuOpen(false);
+  };
+  const handleLogout = () => { setCurrentUser(null); setNotice('You have signed out.'); };
+  const submitAuth = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!authMode) return;
+    setAuthError('');
+    const email = authForm.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setAuthError('Enter a valid email address.'); return; }
+    if (authMode === 'register') {
+      if (!authForm.name.trim()) { setAuthError('Please enter your full name.'); return; }
+      if (authForm.password.length < 8) { setAuthError('Use a password with at least 8 characters.'); return; }
+      if (authForm.password !== authForm.confirmPassword) { setAuthError('The passwords do not match.'); return; }
+      if (users.some(user => user.email.toLowerCase() === email)) { setAuthError('An account with this email already exists. Log in instead.'); return; }
+    } else if (!authForm.password) { setAuthError('Enter your password to continue.'); return; }
+    setAuthBusy(true);
+    try {
+      if (authMode === 'register') {
+        const salt = createPasswordSalt();
+        const account: Account = {
+          id: 'USER-' + Date.now().toString(36).toUpperCase(),
+          name: authForm.name.trim(), email, salt,
+          passwordHash: await hashPassword(authForm.password, salt),
+          createdAt: new Date().toISOString(),
+        };
+        setUsers(previous => [...previous, account]);
+        setCurrentUser({ id: account.id, name: account.name, email: account.email });
+        setAuthMode(null);
+        setNotice('Account created. Welcome to Chona’s Lodging House!');
+      } else {
+        const account = users.find(user => user.email.toLowerCase() === email);
+        if (!account) { setAuthError('No account found for that email. Please register first.'); return; }
+        const submittedHash = await hashPassword(authForm.password, account.salt);
+        if (submittedHash !== account.passwordHash) { setAuthError('Incorrect email or password. Please try again.'); return; }
+        setCurrentUser({ id: account.id, name: account.name, email: account.email });
+        setAuthMode(null);
+        setNotice('Welcome back, ' + account.name.split(' ')[0] + '!');
+      }
+      setAuthForm({ name: '', email: '', password: '', confirmPassword: '' });
+    } catch {
+      setAuthError('This browser could not securely process the password. Open the site on HTTPS or localhost and try again.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   const startBooking = (room: Room) => {
     setForm({
-      guest: '',
-      email: '',
+      guest: currentUser?.name || '',
+      email: currentUser?.email || '',
       phone: '',
       checkIn: today,
       checkOut: '',
@@ -257,6 +335,7 @@ function App() {
       total: bookingRoom.price * nights,
       status: 'Pending',
       createdAt: new Date().toISOString(),
+      userId: currentUser?.id,
     };
     setBookings(previous => [booking, ...previous]);
     setBookingRoom(null);
@@ -369,6 +448,17 @@ function App() {
           >
             Admin
           </button>
+          {!currentUser ? (
+            <>
+              <button className="nav-link auth-nav-link" onClick={() => openAuth('login')}><LogIn size={14} /> Log in</button>
+              <button className="nav-link auth-nav-link auth-nav-register" onClick={() => openAuth('register')}><UserPlus size={14} /> Register</button>
+            </>
+          ) : (
+            <>
+              <button className="nav-link auth-nav-link" onClick={() => go('mybookings')} title={currentUser.email}><UserRound size={14} /> {currentUser.name.split(' ')[0]}</button>
+              <button className="nav-link auth-nav-link" onClick={handleLogout}><LogOut size={14} /> Log out</button>
+            </>
+          )}
         </nav>
         <button className="nav-cta" onClick={() => go('rooms')}>
           Book a room <ChevronRight size={16} />
@@ -612,11 +702,21 @@ function App() {
             <h1>
               My <em>reservations.</em>
             </h1>
-            <p>Review reservation requests created in this browser.</p>
+            <p>Review reservation requests linked to your account.</p>
           </div>
-          {bookings.length ? (
+          {!currentUser ? (
+            <div className="empty-state auth-bookings-prompt">
+              <UserRound size={34} />
+              <h3>Log in to view your reservations</h3>
+              <p>Your reservation list is linked to the account you use on this browser.</p>
+              <div className="auth-prompt-actions">
+                <button className="button button-primary" onClick={() => openAuth('login')}><LogIn size={15} /> Log in</button>
+                <button className="button button-outline" onClick={() => openAuth('register')}><UserPlus size={15} /> Register</button>
+              </div>
+            </div>
+          ) : myBookings.length ? (
             <div className="my-booking-list">
-              {bookings.map(b => (
+              {myBookings.map(b => (
                 <article className="booking-card" key={b.id}>
                   <div className="booking-room-icon">
                     <BedDouble />
@@ -932,6 +1032,42 @@ function App() {
           >
             <X size={16} />
           </button>
+        </div>
+      )}
+      {authMode && (
+        <div className="modal-backdrop auth-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setAuthMode(null); }}>
+          <section className="modal auth-modal" role="dialog" aria-modal="true" aria-label={authMode === 'login' ? 'User login' : 'User registration'}>
+            <button className="modal-close" type="button" onClick={() => setAuthMode(null)} aria-label="Close account form"><X /></button>
+            <aside className="auth-side">
+              <span className="auth-brand-mark"><House size={26} /></span>
+              <div className="auth-side-copy">
+                <div className="eyebrow light"><span /> CHONA’S LODGING HOUSE</div>
+                <h2>Your next stay starts with a warm <em>welcome.</em></h2>
+                <p>Sign in to keep your reservation requests together and make planning your stay easier.</p>
+              </div>
+              <div className="auth-side-foot"><ShieldCheck size={17} /><span>Made for a more comfortable stay.</span></div>
+            </aside>
+            <div className="auth-panel">
+              <div className="auth-panel-heading">
+                <div className="eyebrow"><span /> GUEST ACCOUNT</div>
+                <h2>{authMode === 'login' ? 'Welcome back.' : 'Create your account.'}</h2>
+                <p>{authMode === 'login' ? 'Enter your account details to continue.' : 'Create an account to keep track of your reservations.'}</p>
+              </div>
+              <form className="auth-form" onSubmit={submitAuth}>
+                {authMode === 'register' && <label>Full name<input required autoComplete="name" value={authForm.name} onChange={event => setAuthForm({ ...authForm, name: event.target.value })} placeholder="Your full name" /></label>}
+                <label>Email address<input required type="email" autoComplete="email" value={authForm.email} onChange={event => setAuthForm({ ...authForm, email: event.target.value })} placeholder="you@example.com" /></label>
+                <label>Password<input required type="password" minLength={authMode === 'register' ? 8 : 1} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={authForm.password} onChange={event => setAuthForm({ ...authForm, password: event.target.value })} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Your password'} /></label>
+                {authMode === 'register' && <label>Confirm password<input required type="password" minLength={8} autoComplete="new-password" value={authForm.confirmPassword} onChange={event => setAuthForm({ ...authForm, confirmPassword: event.target.value })} placeholder="Enter your password again" /></label>}
+                {authError && <p className="auth-error" role="alert">{authError}</p>}
+                <button className="button button-primary auth-submit" type="submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'login' ? 'Log in to your account' : 'Create account'}{!authBusy && <ChevronRight size={17} />}</button>
+              </form>
+              <div className="auth-switch">
+                <span>{authMode === 'login' ? 'New here?' : 'Already have an account?'}</span>
+                <button type="button" className="auth-switch-button" onClick={() => openAuth(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? 'Register' : 'Log in'}</button>
+              </div>
+              <p className="auth-demo-note">Demo accounts are stored in this browser only. Use Supabase or a secured server for real production authentication.</p>
+            </div>
+          </section>
         </div>
       )}
       {detailRoom && (
