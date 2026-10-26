@@ -65,9 +65,9 @@ export default async function handler(req: any, res: any) {
   const supabaseUrl = env.SUPABASE_URL || env.VITE_SUPABASE_URL;
   const anonKey = env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY;
   const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SECRET_KEY;
-  const resendKey = env.RESEND_API_KEY;
-  const fromEmail = env.RESEND_FROM_EMAIL;
-  if (!supabaseUrl || !anonKey || !serviceKey || !resendKey || !fromEmail) {
+  const appsScriptUrl = env.APPS_SCRIPT_URL;
+  const appsScriptSecret = env.APPS_SCRIPT_WEBHOOK_SECRET;
+  if (!supabaseUrl || !anonKey || !serviceKey || !appsScriptUrl || !appsScriptSecret) {
     return res.status(200).json({ configured: false, guestSent: false, staffSent: false, reason: 'Email sending is not fully configured.' });
   }
 
@@ -145,26 +145,39 @@ export default async function handler(req: any, res: any) {
         }
         logId = Number(logRow.id);
       }
-      let response: Response;
       let providerData: any = {};
       try {
-        response = await fetch('https://api.resend.com/emails', {
+        const response = await fetch(appsScriptUrl, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: fromEmail, to: [email], subject, html }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            secret: appsScriptSecret,
+            event: event === 'booking_created' ? 'reservation_created' : 'reservation_status_changed',
+            booking: {
+              guestEmail: email,
+              guestName: booking.guest_name,
+              reference: booking.reference,
+              roomName: booking.room_name,
+              checkIn: booking.check_in,
+              checkOut: booking.check_out,
+              guests: booking.guests,
+              total: booking.total,
+              status: booking.status,
+            },
+          }),
         });
         providerData = await response.json().catch(() => ({}));
+        if (!response.ok || providerData?.success !== true) {
+          const safeError = String(providerData?.error || 'Apps Script rejected the email request.').slice(0, 400);
+          await adminClient.from('email_delivery_logs').update({ status: 'failed', error_message: safeError }).eq('id', logId);
+          return false;
+        }
       } catch {
-        await adminClient.from('email_delivery_logs').update({ status: 'failed', error_message: 'Could not connect to the email provider.' }).eq('id', logId);
-        return false;
-      }
-      if (!response.ok || !providerData.id) {
-        const safeError = String(providerData?.message || providerData?.name || 'Email provider rejected the request.').slice(0, 400);
-        await adminClient.from('email_delivery_logs').update({ status: 'failed', error_message: safeError }).eq('id', logId);
+        await adminClient.from('email_delivery_logs').update({ status: 'failed', error_message: 'Could not connect to Google Apps Script.' }).eq('id', logId);
         return false;
       }
       const { error: saveError } = await adminClient.from('email_delivery_logs')
-        .update({ status: 'sent', provider_id: String(providerData.id), sent_at: new Date().toISOString(), error_message: null })
+        .update({ status: 'sent', provider_id: 'apps-script', sent_at: new Date().toISOString(), error_message: null })
         .eq('id', logId);
       if (saveError) console.error('Could not save email delivery state:', saveError.message);
       return true;
