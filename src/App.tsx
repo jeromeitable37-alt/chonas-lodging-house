@@ -1048,23 +1048,34 @@ function App() {
       )}
       {authMode && (
         <div className="modal-backdrop auth-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setAuthMode(null); }}>
-          <section className="modal auth-modal" role="dialog" aria-modal="true" aria-label={authMode === 'login' ? 'User login' : 'User registration'}>
+          <section className="modal auth-modal auth-modal-showcase" role="dialog" aria-modal="true" aria-label={authMode === 'login' ? 'User login' : 'User registration'}>
             <button className="modal-close" type="button" onClick={() => setAuthMode(null)} aria-label="Close account form"><X /></button>
-            <aside className="auth-side">
-              <span className="auth-brand-mark"><House size={26} /></span>
-              <div className="auth-side-copy">
-                <div className="eyebrow light"><span /> CHONA’S LODGING HOUSE</div>
-                <h2>Your next stay starts with a warm <em>welcome.</em></h2>
-                <p>Sign in to keep your reservation requests together and make planning your stay easier.</p>
+
+            <aside className="auth-side auth-photo-side">
+              <div className="auth-side-brand">
+                <span className="auth-brand-mark"><House size={25} strokeWidth={1.7} /></span>
+                <span className="auth-brand-copy"><strong>Chona’s</strong><small>LODGING HOUSE</small></span>
               </div>
-              <div className="auth-side-foot"><ShieldCheck size={17} /><span>Made for a more comfortable stay.</span></div>
+              <div className="auth-side-copy">
+                <div className="auth-photo-eyebrow"><Sparkles size={13} /> YOUR COMFORT, OUR PRIORITY</div>
+                <h2>A lovely stay <em>starts here.</em></h2>
+                <p>Find your room, make a reservation, and keep your stay details in one place.</p>
+              </div>
+              <div className="auth-side-foot"><ShieldCheck size={17} /><span>Private account · Easy reservations</span></div>
             </aside>
+
             <div className="auth-panel">
               <div className="auth-panel-heading">
-                <div className="eyebrow"><span /> GUEST ACCOUNT</div>
-                <h2>{authMode === 'login' ? 'Welcome back.' : 'Create your account.'}</h2>
-                <p>{authMode === 'login' ? 'Enter your account details to continue.' : 'Create an account to keep track of your reservations.'}</p>
+                <div className="auth-welcome-label">WELCOME TO CHONA’S</div>
+                <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+                <p>{authMode === 'login' ? 'Sign in to manage your reservations and plan your next stay.' : 'Create an account to keep your reservation details together.'}</p>
               </div>
+
+              <div className="auth-mode-switch" role="tablist" aria-label="Choose login or registration">
+                <button type="button" role="tab" aria-selected={authMode === 'login'} className={authMode === 'login' ? 'auth-mode-tab active' : 'auth-mode-tab'} onClick={() => { setAuthMode('login'); setAuthError(''); setShowPassword(false); setShowConfirmPassword(false); setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' })); }}>Log in</button>
+                <button type="button" role="tab" aria-selected={authMode === 'register'} className={authMode === 'register' ? 'auth-mode-tab active' : 'auth-mode-tab'} onClick={() => { setAuthMode('register'); setAuthError(''); setShowPassword(false); setShowConfirmPassword(false); setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' })); }}>Register</button>
+              </div>
+
               <form className="auth-form" onSubmit={submitAuth}>
                 {authMode === 'register' && <label>Full name<input required autoComplete="name" value={authForm.name} onChange={event => setAuthForm({ ...authForm, name: event.target.value })} placeholder="Your full name" /></label>}
                 <label>Email address<input required type="email" autoComplete="email" value={authForm.email} onChange={event => setAuthForm({ ...authForm, email: event.target.value })} placeholder="you@example.com" /></label>
@@ -1075,23 +1086,23 @@ function App() {
                     <button type="button" className="auth-password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
                   </div>
                 </label>
-                {authMode === 'register' && (
-                  <label>
-                    Confirm password
-                    <div className="auth-password-input">
-                      <input required type={showConfirmPassword ? 'text' : 'password'} minLength={8} autoComplete="new-password" value={authForm.confirmPassword} onChange={event => setAuthForm({ ...authForm, confirmPassword: event.target.value })} placeholder="Enter your password again" />
-                      <button type="button" className="auth-password-toggle" onClick={() => setShowConfirmPassword(value => !value)} aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} title={showConfirmPassword ? 'Hide password' : 'Show password'}>{showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-                    </div>
-                  </label>
-                )}
+                {authMode === 'register' && <label>Confirm password
+                  <div className="auth-password-input">
+                    <input required type={showConfirmPassword ? 'text' : 'password'} minLength={8} autoComplete="new-password" value={authForm.confirmPassword} onChange={event => setAuthForm({ ...authForm, confirmPassword: event.target.value })} placeholder="Enter your password again" />
+                    <button type="button" className="auth-password-toggle" onClick={() => setShowConfirmPassword(value => !value)} aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} title={showConfirmPassword ? 'Hide password' : 'Show password'}>{showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                  </div>
+                </label>}
                 {authError && <p className="auth-error" role="alert">{authError}</p>}
-                <button className="button button-primary auth-submit" type="submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'login' ? 'Log in to your account' : 'Create account'}{!authBusy && <ChevronRight size={17} />}</button>
+                <button className="button button-primary auth-submit" type="submit" disabled={authBusy}><span>{authBusy ? 'Please wait…' : authMode === 'login' ? 'Log in to your account' : 'Create account'}</span>{!authBusy && <ChevronRight size={17} />}</button>
               </form>
-              <div className="auth-switch">
-                <span>{authMode === 'login' ? 'New here?' : 'Already have an account?'}</span>
-                <button type="button" className="auth-switch-button" onClick={() => openAuth(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? 'Register' : 'Log in'}</button>
+
+              <div className="auth-divider"><span>SAFE & SIMPLE</span></div>
+              <div className="auth-benefits">
+                <div className="auth-benefit"><span className="auth-benefit-icon"><CalendarDays size={17} /></span><div><strong>Manage your bookings</strong><small>See your reservation status anytime.</small></div></div>
+                <div className="auth-benefit"><span className="auth-benefit-icon"><ShieldCheck size={17} /></span><div><strong>Your account stays yours</strong><small>Your bookings stay linked to your sign-in.</small></div></div>
               </div>
-              <p className="auth-demo-note">Demo accounts are stored in this browser only. Use Supabase or a secured server for real production authentication.</p>
+              <p className="auth-demo-note">Demo accounts are stored in this browser only. Secure server authentication is needed before production use.</p>
+              <button className="auth-later" type="button" onClick={() => setAuthMode(null)}>Maybe later</button>
             </div>
           </section>
         </div>
