@@ -175,20 +175,25 @@ const dateKey = (date: Date) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
-const sendReservationNotification = async (bookingId: string, event: 'booking_created' | 'status_updated'): Promise<{ configured: boolean; guestSent: boolean; staffSent: boolean }> => {
-  if (!supabase) return { configured: false, guestSent: false, staffSent: false };
+const sendReservationNotification = async (bookingId: string, event: 'booking_created' | 'status_updated'): Promise<{ configured: boolean; guestSent: boolean; staffSent: boolean; reason?: string }> => {
+  if (!supabase) return { configured: false, guestSent: false, staffSent: false, reason: 'Supabase client is not initialized.' };
   try {
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return { configured: false, guestSent: false, staffSent: false };
+    if (!session?.access_token) return { configured: false, guestSent: false, staffSent: false, reason: 'Your session expired. Sign in again.' };
     const response = await fetch('/api/notify-reservation', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
       body: JSON.stringify({ bookingId, event }),
     });
     const result = await response.json().catch(() => ({}));
-    return { configured: result.configured === true, guestSent: result.guestSent === true, staffSent: result.staffSent === true };
-  } catch {
-    return { configured: false, guestSent: false, staffSent: false };
+    return {
+      configured: result.configured === true,
+      guestSent: result.guestSent === true,
+      staffSent: result.staffSent === true,
+      reason: typeof result.reason === 'string' ? result.reason : typeof result.error === 'string' ? result.error : undefined,
+    };
+  } catch (error) {
+    return { configured: false, guestSent: false, staffSent: false, reason: error instanceof Error ? error.message : 'Network error calling the notification endpoint.' };
   }
 };
 
@@ -726,9 +731,7 @@ function App() {
       const emailResult = await sendReservationNotification(id, 'status_updated');
       setNotice(emailResult.guestSent
         ? 'Reservation status updated and guest email sent.'
-        : emailResult.configured
-          ? 'Reservation status updated, but the guest email could not be sent. Check email delivery logs.'
-          : 'Reservation status updated. Email notifications still need to be configured.');
+        : 'Reservation status updated, but email failed: ' + (emailResult.reason || (emailResult.configured ? 'Check Apps Script Executions and email delivery logs.' : 'Email configuration is incomplete.')));
     } catch {
       setNotice('Unable to update reservation. Verify the admin account and try again.');
     }
