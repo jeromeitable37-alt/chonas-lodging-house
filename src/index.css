@@ -2116,3 +2116,55 @@ h2 em {
   .auth-mode-switch { margin-bottom: 16px; }
   .auth-benefits { gap: 10px; }
 }
+
+.rooms-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 15px;
+  color: #617468;
+  font-size: 12px;
+}
+.loading-spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid #dbe5d9;
+  border-top-color: #2d5748;
+  border-radius: 50%;
+  animation: chona-spin .7s linear infinite;
+}
+@keyframes chona-spin { to { transform: rotate(360deg); } }
+.auth-forgot {
+  justify-self: end;
+  border: 0;
+  padding: 0;
+  margin-top: -4px;
+  background: transparent;
+  color: #41634f;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.auth-forgot:hover { color: #1d4035; text-decoration: underline; }
+.auth-forgot:disabled { opacity: .6; cursor: wait; }
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner { animation-duration: 1.5s; }
+}
+
+.auth-back-to-login {
+  display: inline-flex;
+  align-self: flex-start;
+  margin-top: 11px;
+  color: #486251;
+  font-size: 10px;
+  font-weight: 800;
+}
+.featured-room-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.featured-room-label svg {
+  color: #a68b58;
+}

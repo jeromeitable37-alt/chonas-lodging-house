@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createClient, type Session, type User } from '@supabase/supabase-js';
 import {
   BedDouble,
   CalendarDays,
@@ -25,11 +26,19 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
-  Star,
+
   Users,
-  Wifi,
   X,
 } from 'lucide-react';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim() || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() || '';
+const supabase =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+      })
+    : null;
 
 type Room = {
   id: number;
@@ -45,6 +54,7 @@ type Room = {
 };
 type Booking = {
   id: string;
+  reference: string;
   roomId: number;
   roomName: string;
   guest: string;
@@ -56,11 +66,15 @@ type Booking = {
   total: number;
   status: 'Pending' | 'Confirmed' | 'Checked in' | 'Completed' | 'Cancelled';
   createdAt: string;
-  userId?: string;
+  userId: string;
 };
-type Account = { id: string; name: string; email: string; salt: string; passwordHash: string; createdAt: string; };
-type CurrentUser = Pick<Account, 'id' | 'name' | 'email'>;
-type AuthMode = 'login' | 'register' | null;
+type CurrentUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: 'guest' | 'admin';
+};
+type AuthMode = 'login' | 'register' | 'reset' | 'updatePassword' | null;
 type AuthForm = { name: string; email: string; password: string; confirmPassword: string; };
 const seedRooms: Room[] = [
   {
@@ -126,37 +140,73 @@ const money = (value: number) =>
     currency: 'PHP',
     maximumFractionDigits: 0,
   }).format(value);
-const readStorage = <T,>(key: string, fallback: T): T => {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? (JSON.parse(value) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-};
 const nightsBetween = (start: string, end: string) =>
   Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000);
-const hashPassword = async (password: string, salt: string) => {
-  const data = new TextEncoder().encode(salt + ':' + password);
-  const digest = await window.crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+const today = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Manila',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date());
+
+const roomFromRow = (row: any): Room => ({
+  id: Number(row.id),
+  name: String(row.name),
+  type: String(row.type || 'Standard'),
+  price: Number(row.price),
+  guests: Number(row.guests),
+  beds: String(row.beds || '1 bed'),
+  description: String(row.description || ''),
+  image: String(row.image_url || seedRooms[0].image),
+  amenities: Array.isArray(row.amenities) ? row.amenities : [],
+  available: row.is_active !== false,
+});
+
+const bookingFromRow = (row: any): Booking => ({
+  id: String(row.id),
+  reference: String(row.reference || String(row.id).slice(0, 8).toUpperCase()),
+  roomId: Number(row.room_id),
+  roomName: String(row.room_name || 'Lodging room'),
+  guest: String(row.guest_name || ''),
+  email: String(row.email || ''),
+  phone: String(row.phone || ''),
+  checkIn: String(row.check_in || ''),
+  checkOut: String(row.check_out || ''),
+  guests: Number(row.guests || 1),
+  total: Number(row.total || 0),
+  status: row.status as Booking['status'],
+  createdAt: String(row.created_at || new Date().toISOString()),
+  userId: String(row.user_id || ''),
+});
+
+const profileFromUser = async (user: User): Promise<CurrentUser> => {
+  const fallbackName =
+    String(user.user_metadata?.full_name || user.user_metadata?.name || '').trim() ||
+    (user.email ? user.email.split('@')[0] : 'Guest');
+  if (!supabase) {
+    return { id: user.id, name: fallbackName, email: user.email || '', role: 'guest' };
+  }
+  const { data } = await supabase
+    .from('profiles')
+    .select('full_name, role')
+    .eq('id', user.id)
+    .maybeSingle();
+  return {
+    id: user.id,
+    name: String(data?.full_name || fallbackName),
+    email: user.email || '',
+    role: data?.role === 'admin' ? 'admin' : 'guest',
+  };
 };
-const createPasswordSalt = () => Array.from(window.crypto.getRandomValues(new Uint8Array(16))).map(byte => byte.toString(16).padStart(2, '0')).join('');
-const today = new Date().toISOString().slice(0, 10);
 
 function App() {
-  const [rooms, setRooms] = useState<Room[]>(() =>
-    readStorage('chona-rooms', seedRooms)
-  );
-  const [bookings, setBookings] = useState<Booking[]>(() =>
-    readStorage('chona-bookings', [])
-  );
-  const [view, setView] = useState<'home' | 'rooms' | 'mybookings' | 'admin'>(
-    'home'
-  );
-  const [users, setUsers] = useState<Account[]>(() => readStorage('chona-users', []));
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readStorage('chona-session', null));
-  const isAdmin = currentUser?.email?.toLowerCase() === 'deusboji@gmail.com';
+  const [rooms, setRooms] = useState<Room[]>(seedRooms);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [view, setView] = useState<'home' | 'rooms' | 'mybookings' | 'admin'>('home');
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const isAdmin = currentUser?.role === 'admin';
+  const [authReady, setAuthReady] = useState(false);
+  const [dataLoading, setDataLoading] = useState(Boolean(supabase));
   const [authMode, setAuthMode] = useState<AuthMode>(null);
   const [authForm, setAuthForm] = useState<AuthForm>({ name: '', email: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
@@ -169,9 +219,7 @@ function App() {
   const [detailRoom, setDetailRoom] = useState<Room | null>(null);
   const [notice, setNotice] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState<'reservations' | 'rooms'>(
-    'reservations'
-  );
+  const [adminTab, setAdminTab] = useState<'reservations' | 'rooms'>('reservations');
   const [statusFilter, setStatusFilter] = useState('All');
   const [guestSearch, setGuestSearch] = useState('');
   const [form, setForm] = useState({
@@ -184,21 +232,104 @@ function App() {
   });
 
   useEffect(() => {
-    localStorage.setItem('chona-rooms', JSON.stringify(rooms));
-  }, [rooms]);
+    if (!supabase) {
+      setAuthReady(true);
+      setDataLoading(false);
+      return;
+    }
+    let active = true;
+    const applySession = async (session: Session | null) => {
+      if (!session?.user) {
+        if (active) {
+          setCurrentUser(null);
+          setBookings([]);
+          setAuthReady(true);
+        }
+        return;
+      }
+      try {
+        const account = await profileFromUser(session.user);
+        if (active) setCurrentUser(account);
+      } catch {
+        if (active) {
+          setCurrentUser({
+            id: session.user.id,
+            name: String(session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Guest'),
+            email: session.user.email || '',
+            role: 'guest',
+          });
+        }
+      } finally {
+        if (active) setAuthReady(true);
+      }
+    };
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (error) setNotice('Could not restore your login session. Please sign in again.');
+      void applySession(data.session);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthError('');
+        setShowPassword(false);
+        setShowConfirmPassword(false);
+        setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' }));
+        setAuthMode('updatePassword');
+      }
+      window.setTimeout(() => { void applySession(session); }, 0);
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
   useEffect(() => {
-    localStorage.setItem('chona-bookings', JSON.stringify(bookings));
-  }, [bookings]);
-  useEffect(() => { localStorage.setItem('chona-users', JSON.stringify(users)); }, [users]);
+    if (!supabase) {
+      setDataLoading(false);
+      return;
+    }
+    let active = true;
+    setDataLoading(true);
+    void (async () => {
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('id, name, type, price, guests, beds, description, image_url, amenities, is_active, sort_order')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true });
+      if (!active) return;
+      if (error) {
+        setRooms([]);
+        setNotice('Rooms could not be loaded from the database. Check the Supabase setup.');
+      } else if (data) {
+        setRooms(data.map(roomFromRow));
+      }
+      setDataLoading(false);
+    })();
+    return () => { active = false; };
+  }, []);
+
   useEffect(() => {
-    if (currentUser) localStorage.setItem('chona-session', JSON.stringify(currentUser));
-    else localStorage.removeItem('chona-session');
-  }, [currentUser]);
-  useEffect(() => {
-    if (!notice) return;
-    const id = window.setTimeout(() => setNotice(''), 4200);
-    return () => window.clearTimeout(id);
-  }, [notice]);
+    if (!supabase || !currentUser) {
+      setBookings([]);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      const { data, error } = await supabase
+        .from('bookings')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!active) return;
+      if (error) {
+        setNotice('Your reservations could not be loaded. Please refresh and sign in again.');
+        setBookings([]);
+      } else {
+        setBookings((data || []).map(bookingFromRow));
+      }
+    })();
+    return () => { active = false; };
+  }, [currentUser?.id, currentUser?.role]);
 
   const visibleRooms = useMemo(
     () =>
@@ -240,7 +371,19 @@ function App() {
         .includes(guestSearch.toLowerCase())
   );
 
-  const myBookings = currentUser ? bookings.filter(b => b.userId === currentUser.id || (!b.userId && b.email.toLowerCase() === currentUser.email.toLowerCase())) : [];
+  const myBookings = currentUser
+    ? bookings.filter(booking => booking.userId === currentUser.id)
+    : [];
+
+  const refreshBookings = async () => {
+    if (!supabase || !currentUser) return;
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    setBookings((data || []).map(bookingFromRow));
+  };
 
   const go = (next: typeof view) => {
     setView(next);
@@ -255,8 +398,18 @@ function App() {
     setAuthForm({ name: currentUser?.name || '', email: currentUser?.email || '', password: '', confirmPassword: '' });
     setMenuOpen(false);
   };
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (!supabase) {
+      setNotice('Authentication is not configured yet. Please contact the site administrator.');
+      return;
+    }
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setNotice('Could not sign out. Please try again.');
+      return;
+    }
     setCurrentUser(null);
+    setBookings([]);
     go('home');
     setNotice('You have signed out.');
   };
@@ -264,49 +417,97 @@ function App() {
     event.preventDefault();
     if (!authMode) return;
     setAuthError('');
+    if (!supabase) {
+      setAuthError('Account sign-in is not configured yet. The administrator must set Supabase environment variables and apply the database migration.');
+      return;
+    }
     const email = authForm.email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setAuthError('Enter a valid email address.'); return; }
-    if (authMode === 'register') {
-      if (!authForm.name.trim()) { setAuthError('Please enter your full name.'); return; }
-      if (authForm.password.length < 8) { setAuthError('Use a password with at least 8 characters.'); return; }
-      if (authForm.password !== authForm.confirmPassword) { setAuthError('The passwords do not match.'); return; }
-      if (users.some(user => user.email.toLowerCase() === email)) { setAuthError('An account with this email already exists. Log in instead.'); return; }
-    } else if (!authForm.password) { setAuthError('Enter your password to continue.'); return; }
+    const needsEmail = authMode !== 'updatePassword';
+    if (needsEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setAuthError('Enter a valid email address.');
+      return;
+    }
+    if (authMode === 'register' && !authForm.name.trim()) {
+      setAuthError('Please enter your full name.');
+      return;
+    }
+    if (authMode === 'register' || authMode === 'updatePassword') {
+      if (authForm.password.length < 8) {
+        setAuthError('Use a password with at least 8 characters.');
+        return;
+      }
+      if (authForm.password !== authForm.confirmPassword) {
+        setAuthError('The passwords do not match.');
+        return;
+      }
+    } else if (authMode === 'login' && !authForm.password) {
+      setAuthError('Enter your password to continue.');
+      return;
+    }
+
     setAuthBusy(true);
     try {
+      if (authMode === 'reset') {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin,
+        });
+        if (error) { setAuthError(error.message); return; }
+        setAuthMode(null);
+        setNotice('If an account exists for that email, a password reset link has been sent.');
+        return;
+      }
+      if (authMode === 'updatePassword') {
+        const { error } = await supabase.auth.updateUser({ password: authForm.password });
+        if (error) { setAuthError(error.message); return; }
+        setAuthForm({ name: '', email: '', password: '', confirmPassword: '' });
+        setAuthMode(null);
+        setNotice('Your password has been updated successfully.');
+        return;
+      }
       if (authMode === 'register') {
-        const salt = createPasswordSalt();
-        const account: Account = {
-          id: 'USER-' + Date.now().toString(36).toUpperCase(),
-          name: authForm.name.trim(), email, salt,
-          passwordHash: await hashPassword(authForm.password, salt),
-          createdAt: new Date().toISOString(),
-        };
-        setUsers(previous => [...previous, account]);
-        setCurrentUser({ id: account.id, name: account.name, email: account.email });
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password: authForm.password,
+          options: { data: { full_name: authForm.name.trim() } },
+        });
+        if (error) { setAuthError(error.message); return; }
+        setAuthForm({ name: '', email: '', password: '', confirmPassword: '' });
         setAuthMode(null);
-        setNotice('Account created. Welcome to Chona’s Lodging House!');
-      } else {
-        const account = users.find(user => user.email.toLowerCase() === email);
-        if (!account) { setAuthError('No account found for that email. Please register first.'); return; }
-        const submittedHash = await hashPassword(authForm.password, account.salt);
-        if (submittedHash !== account.passwordHash) { setAuthError('Incorrect email or password. Please try again.'); return; }
-        setCurrentUser({ id: account.id, name: account.name, email: account.email });
-        setAuthMode(null);
-        setNotice('Welcome back, ' + account.name.split(' ')[0] + '!');
+        setNotice(data.session
+          ? 'Account created successfully. Welcome to Chona’s Lodging House!'
+          : 'Account created. Please check your email to confirm your account before signing in.');
+        return;
+      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password: authForm.password });
+      if (error) {
+        setAuthError(error.message === 'Invalid login credentials'
+          ? 'Email or password is incorrect. If this is a new account, confirm your email first.'
+          : error.message);
+        return;
       }
       setAuthForm({ name: '', email: '', password: '', confirmPassword: '' });
+      setAuthMode(null);
+      setNotice('Signed in successfully. Welcome back!');
     } catch {
-      setAuthError('This browser could not securely process the password. Open the site on HTTPS or localhost and try again.');
+      setAuthError('Could not connect to authentication. Check your internet connection and Supabase configuration.');
     } finally {
       setAuthBusy(false);
     }
   };
 
   const startBooking = (room: Room) => {
+    if (!supabase) {
+      setNotice('Online reservations are temporarily unavailable until the database is configured.');
+      return;
+    }
+    if (!currentUser) {
+      setNotice('Please sign in or create an account before booking a room.');
+      openAuth('login');
+      return;
+    }
     setForm({
-      guest: currentUser?.name || '',
-      email: currentUser?.email || '',
+      guest: currentUser.name || '',
+      email: currentUser.email || '',
       phone: '',
       checkIn: today,
       checkOut: '',
@@ -315,9 +516,15 @@ function App() {
     setBookingRoom(room);
     setDetailRoom(null);
   };
-  const submitBooking = (event: React.FormEvent<HTMLFormElement>) => {
+  const submitBooking = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nights = nightsBetween(form.checkIn, form.checkOut);
+    if (!supabase || !currentUser) {
+      setNotice('Please sign in and configure the reservation database before booking.');
+      setBookingRoom(null);
+      if (supabase && !currentUser) openAuth('login');
+      return;
+    }
     if (
       !bookingRoom ||
       !form.guest.trim() ||
@@ -328,52 +535,86 @@ function App() {
       Number(form.guests) < 1 ||
       Number(form.guests) > bookingRoom.guests
     ) {
-      setNotice(
-        'Please check your details. Checkout must be after check-in and guest count must fit the room.'
-      );
+      setNotice('Please check your details. Check-out must be after check-in, and guest count must fit the room.');
       return;
     }
-    const booking: Booking = {
-      id: 'HH-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
-      roomId: bookingRoom.id,
-      roomName: bookingRoom.name,
-      guest: form.guest.trim(),
-      email: form.email.trim(),
-      phone: form.phone.trim(),
-      checkIn: form.checkIn,
-      checkOut: form.checkOut,
-      guests: Number(form.guests),
-      total: bookingRoom.price * nights,
-      status: 'Pending',
-      createdAt: new Date().toISOString(),
-      userId: currentUser?.id,
-    };
-    setBookings(previous => [booking, ...previous]);
-    setBookingRoom(null);
-    setNotice(
-      'Reservation request submitted! Your reference is ' +
-        booking.id +
-        '. The booking is pending confirmation.'
-    );
-    go('mybookings');
+    setAuthBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('create_booking', {
+        p_room_id: bookingRoom.id,
+        p_guest_name: form.guest.trim(),
+        p_email: form.email.trim(),
+        p_phone: form.phone.trim(),
+        p_check_in: form.checkIn,
+        p_check_out: form.checkOut,
+        p_guests: Number(form.guests),
+        p_notes: null,
+      });
+      if (error) {
+        const message = error.message.toLowerCase();
+        if (message.includes('not available') || message.includes('overlap')) {
+          setNotice('Sorry, that room is no longer available for those dates. Please choose another date or room.');
+        } else if (message.includes('capacity') || message.includes('guest')) {
+          setNotice('The selected room cannot accommodate that number of guests.');
+        } else {
+          setNotice('We could not submit the reservation. Please check your details and try again.');
+        }
+        return;
+      }
+      const reference = data?.reference ? String(data.reference) : 'submitted';
+      await refreshBookings();
+      setBookingRoom(null);
+      setNotice('Reservation request submitted successfully. Reference: ' + reference + '. It is pending confirmation.');
+      go('mybookings');
+    } catch {
+      setNotice('We could not refresh the reservation list. Your request may have been accepted; refresh before trying again.');
+    } finally {
+      setAuthBusy(false);
+    }
   };
-  const updateStatus = (id: string, status: Booking['status']) =>
-    setBookings(previous =>
-      previous.map(b => (b.id === id ? { ...b, status } : b))
-    );
+  const updateStatus = async (id: string, status: Booking['status']) => {
+    if (!supabase || !isAdmin) {
+      setNotice('Admin access is required.');
+      return;
+    }
+    try {
+      const { error } = await supabase.from('bookings').update({ status }).eq('id', id);
+      if (error) throw error;
+      await refreshBookings();
+      setNotice('Reservation status updated.');
+    } catch {
+      setNotice('Unable to update reservation. Verify the admin account and try again.');
+    }
+  };
   const deleteBooking = (id: string) => {
-    if (window.confirm('Delete this reservation? This cannot be undone.')) {
-      setBookings(previous => previous.filter(b => b.id !== id));
-      setNotice('Reservation deleted.');
+    if (!isAdmin) {
+      setNotice('Admin access is required.');
+      return;
+    }
+    if (window.confirm('Cancel this reservation? The booking record will be kept for history.')) {
+      void updateStatus(id, 'Cancelled');
     }
   };
-  const deleteRoom = (id: number) => {
-    if (window.confirm('Remove this room from the listings?')) {
-      setRooms(previous => previous.filter(r => r.id !== id));
-      setNotice('Room removed.');
+  const deleteRoom = async (id: number) => {
+    if (!supabase || !isAdmin) {
+      setNotice('Admin access is required.');
+      return;
+    }
+    if (!window.confirm('Remove this room from public listings? Previous reservations will remain in the database.')) return;
+    try {
+      const { error } = await supabase.from('rooms').update({ is_active: false }).eq('id', id);
+      if (error) throw error;
+      setRooms(previous => previous.filter(room => room.id !== id));
+      setNotice('Room removed from public listings.');
+    } catch {
+      setNotice('Could not remove this room. Check your admin permissions.');
     }
   };
-  const addRoom = () => {
+  const addRoom = async () => {
+    if (!supabase || !isAdmin) {
+      setNotice('Admin access is required.');
+      return;
+    }
     const name = window.prompt('Room name?');
     if (!name?.trim()) return;
     const priceRaw = window.prompt('Nightly rate in PHP?', '1000');
@@ -382,22 +623,25 @@ function App() {
       setNotice('Please enter a valid room rate.');
       return;
     }
-    setRooms(previous => [
-      ...previous,
-      {
-        id: Math.max(0, ...previous.map(r => r.id)) + 1,
+    try {
+      const { data, error } = await supabase.from('rooms').insert({
         name: name.trim(),
         type: 'Standard',
         price,
         guests: 2,
         beds: '1 double bed',
         description: 'A comfortable room for your stay.',
-        image: seedRooms[0].image,
+        image_url: seedRooms[0].image,
         amenities: ['Wi-Fi', 'Air conditioning'],
-        available: true,
-      },
-    ]);
-    setNotice('New room added to listings.');
+        is_active: true,
+        sort_order: rooms.length + 1,
+      }).select('*').single();
+      if (error) throw error;
+      setRooms(previous => [...previous, roomFromRow(data)]);
+      setNotice('New room saved successfully.');
+    } catch {
+      setNotice('Could not add the room. Check your admin permissions and the room details.');
+    }
   };
 
   return (
@@ -653,6 +897,7 @@ function App() {
               Choose a space that suits your trip, your people, and your budget.
             </p>
           </div>
+          {dataLoading && <div className="rooms-loading" role="status"><span className="loading-spinner" /> Loading available rooms…</div>}
           <div className="listing-tools">
             <div className="listing-search">
               <Search size={17} />
@@ -742,7 +987,7 @@ function App() {
                       <StatusPill status={b.status} />
                     </div>
                     <p>
-                      Reference: <strong>{b.id}</strong> · {b.guest}
+                      Reference: <strong>{b.reference}</strong> · {b.guest}
                     </p>
                     <div className="booking-meta">
                       <span>
@@ -903,7 +1148,7 @@ function App() {
                         <tr key={b.id}>
                           <td>
                             <strong>{b.guest}</strong>
-                            <small>{b.id}</small>
+                            <small>{b.reference}</small>
                             <small>{b.email}</small>
                           </td>
                           <td>
@@ -1048,9 +1293,8 @@ function App() {
       )}
       {authMode && (
         <div className="modal-backdrop auth-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setAuthMode(null); }}>
-          <section className="modal auth-modal auth-modal-showcase" role="dialog" aria-modal="true" aria-label={authMode === 'login' ? 'User login' : 'User registration'}>
+          <section className="modal auth-modal auth-modal-showcase" role="dialog" aria-modal="true" aria-label={authMode === 'login' ? 'User login' : authMode === 'register' ? 'User registration' : 'Password recovery'}>
             <button className="modal-close" type="button" onClick={() => setAuthMode(null)} aria-label="Close account form"><X /></button>
-
             <aside className="auth-side auth-photo-side">
               <div className="auth-side-brand">
                 <span className="auth-brand-mark"><House size={25} strokeWidth={1.7} /></span>
@@ -1067,41 +1311,58 @@ function App() {
             <div className="auth-panel">
               <div className="auth-panel-heading">
                 <div className="auth-welcome-label">WELCOME TO CHONA’S</div>
-                <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
-                <p>{authMode === 'login' ? 'Sign in to manage your reservations and plan your next stay.' : 'Create an account to keep your reservation details together.'}</p>
+                <h2>{authMode === 'login' ? 'Welcome back' : authMode === 'register' ? 'Create your account' : authMode === 'reset' ? 'Reset your password' : 'Choose a new password'}</h2>
+                <p>{authMode === 'login' ? 'Sign in to manage your reservations and plan your next stay.' : authMode === 'register' ? 'Create an account to keep your reservation details together.' : authMode === 'reset' ? 'We will email you a secure link to reset your password.' : 'Choose a strong new password to secure your account.'}</p>
               </div>
 
-              <div className="auth-mode-switch" role="tablist" aria-label="Choose login or registration">
-                <button type="button" role="tab" aria-selected={authMode === 'login'} className={authMode === 'login' ? 'auth-mode-tab active' : 'auth-mode-tab'} onClick={() => { setAuthMode('login'); setAuthError(''); setShowPassword(false); setShowConfirmPassword(false); setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' })); }}>Log in</button>
-                <button type="button" role="tab" aria-selected={authMode === 'register'} className={authMode === 'register' ? 'auth-mode-tab active' : 'auth-mode-tab'} onClick={() => { setAuthMode('register'); setAuthError(''); setShowPassword(false); setShowConfirmPassword(false); setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' })); }}>Register</button>
-              </div>
+              {(authMode === 'login' || authMode === 'register') && (
+                <div className="auth-mode-switch" role="tablist" aria-label="Choose login or registration">
+                  <button type="button" role="tab" aria-selected={authMode === 'login'} className={authMode === 'login' ? 'auth-mode-tab active' : 'auth-mode-tab'} onClick={() => { setAuthMode('login'); setAuthError(''); setShowPassword(false); setShowConfirmPassword(false); setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' })); }}>Log in</button>
+                  <button type="button" role="tab" aria-selected={authMode === 'register'} className={authMode === 'register' ? 'auth-mode-tab active' : 'auth-mode-tab'} onClick={() => { setAuthMode('register'); setAuthError(''); setShowPassword(false); setShowConfirmPassword(false); setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' })); }}>Register</button>
+                </div>
+              )}
 
+              {!supabase && <p className="auth-error" role="status">Online sign-in is not configured yet. The site administrator must set the Supabase URL and public key, then apply the database migration.</p>}
               <form className="auth-form" onSubmit={submitAuth}>
                 {authMode === 'register' && <label>Full name<input required autoComplete="name" value={authForm.name} onChange={event => setAuthForm({ ...authForm, name: event.target.value })} placeholder="Your full name" /></label>}
-                <label>Email address<input required type="email" autoComplete="email" value={authForm.email} onChange={event => setAuthForm({ ...authForm, email: event.target.value })} placeholder="you@example.com" /></label>
-                <label>
-                  Password
-                  <div className="auth-password-input">
-                    <input required type={showPassword ? 'text' : 'password'} minLength={authMode === 'register' ? 8 : 1} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={authForm.password} onChange={event => setAuthForm({ ...authForm, password: event.target.value })} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Your password'} />
-                    <button type="button" className="auth-password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-                  </div>
-                </label>
-                {authMode === 'register' && <label>Confirm password
-                  <div className="auth-password-input">
-                    <input required type={showConfirmPassword ? 'text' : 'password'} minLength={8} autoComplete="new-password" value={authForm.confirmPassword} onChange={event => setAuthForm({ ...authForm, confirmPassword: event.target.value })} placeholder="Enter your password again" />
-                    <button type="button" className="auth-password-toggle" onClick={() => setShowConfirmPassword(value => !value)} aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} title={showConfirmPassword ? 'Hide password' : 'Show password'}>{showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-                  </div>
-                </label>}
+                {authMode !== 'updatePassword' && <label>Email address<input required type="email" autoComplete="email" value={authForm.email} onChange={event => setAuthForm({ ...authForm, email: event.target.value })} placeholder="you@example.com" /></label>}
+                {authMode !== 'reset' && (
+                  <label>
+                    {authMode === 'updatePassword' ? 'New password' : 'Password'}
+                    <div className="auth-password-input">
+                      <input required type={showPassword ? 'text' : 'password'} minLength={authMode === 'register' || authMode === 'updatePassword' ? 8 : 1} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={authForm.password} onChange={event => setAuthForm({ ...authForm, password: event.target.value })} placeholder={authMode === 'register' || authMode === 'updatePassword' ? 'At least 8 characters' : 'Your password'} />
+                      <button type="button" className="auth-password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                    </div>
+                  </label>
+                )}
+                {(authMode === 'register' || authMode === 'updatePassword') && (
+                  <label>Confirm password
+                    <div className="auth-password-input">
+                      <input required type={showConfirmPassword ? 'text' : 'password'} minLength={8} autoComplete="new-password" value={authForm.confirmPassword} onChange={event => setAuthForm({ ...authForm, confirmPassword: event.target.value })} placeholder="Enter your password again" />
+                      <button type="button" className="auth-password-toggle" onClick={() => setShowConfirmPassword(value => !value)} aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} title={showConfirmPassword ? 'Hide password' : 'Show password'}>{showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                    </div>
+                  </label>
+                )}
+                {authMode === 'login' && <button type="button" className="auth-forgot" onClick={() => { setAuthMode('reset'); setAuthError(''); setAuthForm(previous => ({ ...previous, password: '', confirmPassword: '' })); }} disabled={authBusy}>Forgot password?</button>}
                 {authError && <p className="auth-error" role="alert">{authError}</p>}
-                <button className="button button-primary auth-submit" type="submit" disabled={authBusy}><span>{authBusy ? 'Please wait…' : authMode === 'login' ? 'Log in to your account' : 'Create account'}</span>{!authBusy && <ChevronRight size={17} />}</button>
+                <button className="button button-primary auth-submit" type="submit" disabled={authBusy || !authReady || !supabase}>
+                  <span>{authBusy ? 'Please wait…' : authMode === 'login' ? 'Log in to your account' : authMode === 'register' ? 'Create account' : authMode === 'reset' ? 'Send reset link' : 'Update password'}</span>
+                  {!authBusy && <ChevronRight size={17} />}
+                </button>
               </form>
 
-              <div className="auth-divider"><span>SAFE & SIMPLE</span></div>
-              <div className="auth-benefits">
-                <div className="auth-benefit"><span className="auth-benefit-icon"><CalendarDays size={17} /></span><div><strong>Manage your bookings</strong><small>See your reservation status anytime.</small></div></div>
-                <div className="auth-benefit"><span className="auth-benefit-icon"><ShieldCheck size={17} /></span><div><strong>Your account stays yours</strong><small>Your bookings stay linked to your sign-in.</small></div></div>
-              </div>
-              <p className="auth-demo-note">Demo accounts are stored in this browser only. Secure server authentication is needed before production use.</p>
+              {(authMode === 'login' || authMode === 'register') && (
+                <>
+                  <div className="auth-divider"><span>SAFE & SIMPLE</span></div>
+                  <div className="auth-benefits">
+                    <div className="auth-benefit"><span className="auth-benefit-icon"><CalendarDays size={17} /></span><div><strong>Manage your bookings</strong><small>See your reservation status anytime.</small></div></div>
+                    <div className="auth-benefit"><span className="auth-benefit-icon"><ShieldCheck size={17} /></span><div><strong>Your account stays yours</strong><small>Your bookings stay linked to your sign-in.</small></div></div>
+                  </div>
+                </>
+              )}
+
+              <p className="auth-demo-note">{supabase ? 'Your account is managed securely through Supabase Authentication.' : 'Authentication needs to be configured before guests can create accounts or log in.'}</p>
+              {(authMode === 'reset' || authMode === 'updatePassword') && <button type="button" className="auth-switch-button auth-back-to-login" onClick={() => openAuth('login')}>Back to log in</button>}
               <button className="auth-later" type="button" onClick={() => setAuthMode(null)}>Maybe later</button>
             </div>
           </section>
@@ -1308,6 +1569,7 @@ function App() {
                 <button
                   className="button button-primary submit-booking"
                   type="submit"
+                  disabled={authBusy}
                 >
                   Send reservation request <ChevronRight size={17} />
                 </button>
@@ -1350,7 +1612,7 @@ function RoomCard({
         <div className="room-card-heading">
           <h3>{room.name}</h3>
           <div className="room-rating">
-            <Star size={13} fill="currentColor" /> <span>Room highlight</span>
+            <Sparkles size={13} /> <span>Featured room</span>
           </div>
         </div>
         <p>{room.description}</p>
