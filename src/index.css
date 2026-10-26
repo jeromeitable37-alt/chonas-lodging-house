@@ -2168,3 +2168,81 @@ h2 em {
 .featured-room-label svg {
   color: #a68b58;
 }
+
+
+/* Admin dashboard polish */
+.admin-access-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid #d8e5d6; border-radius: 5px; background: #eff5ec;
+  color: #345e43; padding: 10px 13px; font-size: 9px; font-weight: 800;
+  letter-spacing: .8px; white-space: nowrap;
+}
+.admin-toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.admin-tool-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  white-space: nowrap; min-height: 39px; font-size: 10px;
+}
+.admin-tool-button:disabled { opacity: .5; cursor: not-allowed; }
+.spin-icon { animation: chona-spin .8s linear infinite; }
+.admin-empty-state { padding: 42px 22px 46px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.admin-empty-icon { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 16px; background: #edf3eb; color: #345e49; margin-bottom: 5px; }
+.admin-empty-state h3 { margin: 0; color: #284638; font-family: 'Playfair Display',serif; font-weight: 500; font-size: 23px; }
+.admin-empty-state p { max-width: 420px; margin: 0 0 7px; color: #7b887d; font-size: 11px; line-height: 1.8; text-align: center; }
+.admin-empty-state .button { display: inline-flex; align-items: center; gap: 8px; }
+.room-admin-actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+.room-admin-actions .icon-button { margin-left: 0; border-radius: 5px; width: 33px; height: 33px; }
+.admin-footer-note { display: flex; align-items: flex-start; gap: 9px; margin-top: 17px; padding: 13px 15px; border: 1px solid #e2e9df; border-radius: 6px; background: #f5f7f2; color: #6b7b6e; font-size: 10px; line-height: 1.7; }
+.admin-footer-note svg { color: #426a4f; flex-shrink: 0; margin-top: 1px; }
+.admin-workspace { border-radius: 7px; overflow: hidden; box-shadow: 0 8px 28px rgba(23,45,33,.035); }
+.stats-grid .stat-card { border-radius: 7px; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+.stats-grid .stat-card:hover { transform: translateY(-2px); border-color: #d5e0d1; box-shadow: 0 10px 26px rgba(23,45,33,.06); }
+.data-table tbody tr { transition: background .15s ease; }
+.data-table tbody tr:hover { background: #fbfcf9; }
+.room-admin-row { grid-template-columns: 70px minmax(160px,1fr) 115px 75px; border-radius: 5px; }
+.room-admin-row img { border-radius: 5px; background: #edf1eb; }
+.room-admin-row > strong { color: var(--green); }
+.table-empty { background: linear-gradient(180deg,#fff,#fcfdfb); }
+.room-editor-modal { width: min(100%,760px); border-radius: 13px; border: 1px solid #e9ece5; background: #fff; }
+.room-editor-heading { padding: 31px 34px 0; }
+.room-editor-heading h2 { margin: 13px 0 8px; color: var(--ink); font-family: 'Playfair Display',serif; font-size: 30px; font-weight: 500; }
+.room-editor-heading p { margin: 0 0 20px; color: #7d897f; font-size: 11px; line-height: 1.7; }
+.room-editor-form { padding: 0 34px 31px; }
+.room-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.room-editor-grid label { display: flex; flex-direction: column; min-width: 0; gap: 7px; color: #53675a; font-size: 10px; font-weight: 700; }
+.room-editor-grid input, .room-editor-grid select, .room-editor-grid textarea {
+  width: 100%; min-width: 0; border: 1px solid #dfe5dc; border-radius: 6px;
+  background: #fff; color: #2e4436; padding: 11px 12px; outline: none; font: inherit;
+  font-size: 11px; transition: border-color .18s ease, box-shadow .18s ease;
+}
+.room-editor-grid input:focus, .room-editor-grid select:focus, .room-editor-grid textarea:focus { border-color: #779781; box-shadow: 0 0 0 3px rgba(45,87,72,.1); }
+.room-editor-grid textarea { resize: vertical; line-height: 1.65; }
+.room-editor-full { grid-column: 1 / -1; }
+.room-editor-preview { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 9px; border-radius: 6px; background: #f5f7f2; color: #607365; font-size: 10px; }
+.room-editor-preview img { display: block; width: 76px; height: 55px; border-radius: 4px; object-fit: cover; }
+.room-editor-preview span { display: inline-flex; align-items: center; gap: 6px; }
+.room-editor-preview svg { color: #3d704e; }
+.room-editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px solid #e9ece5; padding-top: 18px; margin-top: 20px; }
+.room-editor-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+@media (max-width: 840px) {
+  .admin-heading { align-items: flex-start; flex-direction: column; }
+  .admin-toolbar { flex-wrap: wrap; }
+  .admin-toolbar .listing-search { flex: 1 1 100%; }
+  .admin-toolbar-actions { margin-left: 0; }
+}
+@media (max-width: 600px) {
+  .admin-page { padding: 30px 14px 52px; }
+  .admin-toolbar-actions { width: 100%; }
+  .admin-tool-button { flex: 1; }
+  .room-editor-heading { padding: 26px 21px 0; }
+  .room-editor-form { padding: 0 21px 23px; }
+  .room-editor-grid { grid-template-columns: 1fr; }
+  .room-editor-full { grid-column: auto; }
+  .room-admin-row { grid-template-columns: 52px minmax(95px,1fr) 85px 70px; gap: 8px; }
+  .room-admin-row img { width: 52px; height: 48px; }
+  .room-admin-actions .icon-button { width: 29px; height: 29px; }
+  .admin-tabs { gap: 18px; padding: 0 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stats-grid .stat-card, .data-table tbody tr { transition: none; }
+  .spin-icon { animation: none; }
+}

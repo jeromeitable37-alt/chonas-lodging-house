@@ -11,8 +11,13 @@ import {
   Clock3,
   Coffee,
   DoorOpen,
+  Download,
   Filter,
   House,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
 
   MapPin,
   Menu,
@@ -76,6 +81,17 @@ type CurrentUser = {
 };
 type AuthMode = 'login' | 'register' | 'reset' | 'updatePassword' | null;
 type AuthForm = { name: string; email: string; password: string; confirmPassword: string; };
+type RoomEditorForm = {
+  id?: number;
+  name: string;
+  type: string;
+  price: string;
+  guests: string;
+  beds: string;
+  description: string;
+  image: string;
+  amenities: string;
+};
 const seedRooms: Room[] = [
   {
     id: 1,
@@ -222,6 +238,9 @@ function App() {
   const [adminTab, setAdminTab] = useState<'reservations' | 'rooms'>('reservations');
   const [statusFilter, setStatusFilter] = useState('All');
   const [guestSearch, setGuestSearch] = useState('');
+  const [adminRefreshing, setAdminRefreshing] = useState(false);
+  const [roomSaveBusy, setRoomSaveBusy] = useState(false);
+  const [roomEditor, setRoomEditor] = useState<RoomEditorForm | null>(null);
   const [form, setForm] = useState({
     guest: '',
     email: '',
@@ -610,38 +629,130 @@ function App() {
       setNotice('Could not remove this room. Check your admin permissions.');
     }
   };
-  const addRoom = async () => {
+  const openNewRoom = () => {
     if (!supabase || !isAdmin) {
       setNotice('Admin access is required.');
       return;
     }
-    const name = window.prompt('Room name?');
-    if (!name?.trim()) return;
-    const priceRaw = window.prompt('Nightly rate in PHP?', '1000');
-    const price = Number(priceRaw);
-    if (!Number.isFinite(price) || price < 1) {
-      setNotice('Please enter a valid room rate.');
+    setRoomEditor({
+      name: '',
+      type: 'Standard',
+      price: '1000',
+      guests: '2',
+      beds: '1 double bed',
+      description: '',
+      image: seedRooms[0].image,
+      amenities: 'Wi-Fi, Air conditioning',
+    });
+  };
+  const openEditRoom = (room: Room) => {
+    if (!supabase || !isAdmin) {
+      setNotice('Admin access is required.');
       return;
     }
-    try {
-      const { data, error } = await supabase.from('rooms').insert({
-        name: name.trim(),
-        type: 'Standard',
-        price,
-        guests: 2,
-        beds: '1 double bed',
-        description: 'A comfortable room for your stay.',
-        image_url: seedRooms[0].image,
-        amenities: ['Wi-Fi', 'Air conditioning'],
-        is_active: true,
-        sort_order: rooms.length + 1,
-      }).select('*').single();
-      if (error) throw error;
-      setRooms(previous => [...previous, roomFromRow(data)]);
-      setNotice('New room saved successfully.');
-    } catch {
-      setNotice('Could not add the room. Check your admin permissions and the room details.');
+    setRoomEditor({
+      id: room.id,
+      name: room.name,
+      type: room.type,
+      price: String(room.price),
+      guests: String(room.guests),
+      beds: room.beds,
+      description: room.description,
+      image: room.image,
+      amenities: room.amenities.join(', '),
+    });
+  };
+  const saveRoom = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase || !isAdmin || !roomEditor) {
+      setNotice('Admin access is required.');
+      return;
     }
+    const price = Number(roomEditor.price);
+    const guests = Number(roomEditor.guests);
+    if (!roomEditor.name.trim() || !roomEditor.type.trim() || !roomEditor.beds.trim() ||
+        !Number.isFinite(price) || price <= 0 ||
+        !Number.isInteger(guests) || guests < 1 || guests > 20) {
+      setNotice('Check the room name, nightly rate, bed details, and guest capacity.');
+      return;
+    }
+    setRoomSaveBusy(true);
+    try {
+      const payload = {
+        name: roomEditor.name.trim(),
+        type: roomEditor.type.trim(),
+        price,
+        guests,
+        beds: roomEditor.beds.trim(),
+        description: roomEditor.description.trim(),
+        image_url: roomEditor.image.trim() || seedRooms[0].image,
+        amenities: roomEditor.amenities.split(',').map(item => item.trim()).filter(Boolean),
+      };
+      if (roomEditor.id !== undefined) {
+        const { data, error } = await supabase.from('rooms').update(payload).eq('id', roomEditor.id).select('*').single();
+        if (error) throw error;
+        setRooms(previous => previous.map(room => room.id === roomEditor.id ? roomFromRow(data) : room));
+        setNotice('Room details updated successfully.');
+      } else {
+        const { data, error } = await supabase.from('rooms').insert({
+          ...payload, is_active: true, sort_order: rooms.length + 1,
+        }).select('*').single();
+        if (error) throw error;
+        setRooms(previous => [...previous, roomFromRow(data)]);
+        setNotice('New room added to the listings.');
+      }
+      setRoomEditor(null);
+    } catch {
+      setNotice('Could not save this room. Check that its name is unique and your admin role is active.');
+    } finally {
+      setRoomSaveBusy(false);
+    }
+  };
+  const refreshAdminDashboard = async () => {
+    if (!supabase || !isAdmin) {
+      setNotice('Admin access is required.');
+      return;
+    }
+    setAdminRefreshing(true);
+    try {
+      const [roomResult, bookingResult] = await Promise.all([
+        supabase.from('rooms').select('id, name, type, price, guests, beds, description, image_url, amenities, is_active, sort_order')
+          .eq('is_active', true).order('sort_order', { ascending: true }),
+        supabase.from('bookings').select('*').order('created_at', { ascending: false }),
+      ]);
+      if (roomResult.error) throw roomResult.error;
+      if (bookingResult.error) throw bookingResult.error;
+      setRooms((roomResult.data || []).map(roomFromRow));
+      setBookings((bookingResult.data || []).map(bookingFromRow));
+      setNotice('Dashboard data refreshed.');
+    } catch {
+      setNotice('Could not refresh dashboard data. Check the database connection and admin permissions.');
+    } finally {
+      setAdminRefreshing(false);
+    }
+  };
+  const exportBookings = () => {
+    if (!isAdmin) {
+      setNotice('Admin access is required.');
+      return;
+    }
+    const columns = ['Reference', 'Guest', 'Email', 'Phone', 'Room', 'Check-in', 'Check-out', 'Guests', 'Total PHP', 'Status', 'Created'];
+    const quoteCsv = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+    const rows = filteredBookings.map(booking => [
+      booking.reference, booking.guest, booking.email, booking.phone,
+      booking.roomName, booking.checkIn, booking.checkOut, booking.guests,
+      booking.total, booking.status, booking.createdAt,
+    ]);
+    const csv = '\uFEFF' + [columns, ...rows].map(row => row.map(quoteCsv).join(',')).join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'chonas-reservations-' + today + '.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   };
 
   return (
@@ -1047,12 +1158,12 @@ function App() {
                 Admin <em>dashboard.</em>
               </h1>
               <p>
-                Manage room listings and reservation requests for this demo
-                property.
+                Manage guest requests, keep room details current, and follow
+                every stay from one workspace.
               </p>
             </div>
-            <span className="admin-demo">
-              <ShieldCheck size={15} /> DEMO ADMIN VIEW
+            <span className="admin-access-badge">
+              <ShieldCheck size={15} /> AUTHORIZED STAFF
             </span>
           </div>
           <div className="stats-grid">
@@ -1131,6 +1242,14 @@ function App() {
                       <option key={s}>{s}</option>
                     ))}
                   </select>
+                  <div className="admin-toolbar-actions">
+                    <button className="button button-outline admin-tool-button" type="button" onClick={() => void refreshAdminDashboard()} disabled={adminRefreshing}>
+                      <RefreshCw size={14} className={adminRefreshing ? 'spin-icon' : ''} /> {adminRefreshing ? 'Refreshing…' : 'Refresh'}
+                    </button>
+                    <button className="button button-primary admin-tool-button" type="button" onClick={exportBookings} disabled={!filteredBookings.length}>
+                      <Download size={14} /> Export CSV
+                    </button>
+                  </div>
                 </div>
                 <div className="table-scroll">
                   <table className="data-table">
@@ -1186,7 +1305,7 @@ function App() {
                             </select>
                             <button
                               className="icon-button danger"
-                              title="Delete reservation"
+                              title="Cancel reservation" aria-label="Cancel reservation"
                               onClick={() => deleteBooking(b.id)}
                             >
                               <X size={16} />
@@ -1198,8 +1317,15 @@ function App() {
                   </table>
                 </div>
                 {filteredBookings.length === 0 && (
-                  <div className="table-empty">
-                    No reservations match your filters.
+                  <div className="table-empty admin-empty-state">
+                    <span className="admin-empty-icon"><ClipboardList size={24} /></span>
+                    <h3>{bookings.length === 0 ? 'No reservations yet' : 'No matching reservations'}</h3>
+                    <p>{bookings.length === 0
+                      ? 'New guest requests will appear here. Room listings are ready for guests to browse and reserve.'
+                      : 'Try clearing the guest search or choosing a different booking status.'}</p>
+                    {bookings.length === 0
+                      ? <button className="button button-outline" type="button" onClick={() => setAdminTab('rooms')}>Review room listings <ChevronRight size={15} /></button>
+                      : <button className="button button-outline" type="button" onClick={() => { setGuestSearch(''); setStatusFilter('All'); }}>Clear filters</button>}
                   </div>
                 )}
               </>
@@ -1209,8 +1335,8 @@ function App() {
                   <p>
                     Room rates are per night. Add a room or remove a listing.
                   </p>
-                  <button className="button button-primary" onClick={addRoom}>
-                    + Add room
+                  <button className="button button-primary" type="button" onClick={openNewRoom}>
+                    <Plus size={15} /> Add room
                   </button>
                 </div>
                 <div className="room-admin-list">
@@ -1227,24 +1353,24 @@ function App() {
                         {money(room.price)}
                         <small>/night</small>
                       </strong>
-                      <button
-                        className="icon-button danger"
-                        title={'Remove ' + room.name}
-                        onClick={() => deleteRoom(room.id)}
-                      >
-                        <X size={16} />
-                      </button>
+                      <div className="room-admin-actions">
+                        <button className="icon-button" type="button" title={'Edit ' + room.name} aria-label={'Edit ' + room.name} onClick={() => openEditRoom(room)}>
+                          <Pencil size={15} />
+                        </button>
+                        <button className="icon-button danger" type="button" title={'Remove ' + room.name} aria-label={'Remove ' + room.name} onClick={() => deleteRoom(room.id)}>
+                          <X size={16} />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               </>
             )}
           </div>
-          <p className="demo-disclaimer">
-            Demo note: this version stores data in the current browser using
-            local storage. It is suitable for a prototype; production use needs
-            secure staff login and shared server-side storage.
-          </p>
+          <div className="admin-footer-note">
+            <ShieldCheck size={15} />
+            <span>Changes are saved to the shared lodging database. Review reservations and room availability regularly.</span>
+          </div>
         </main>
       )}
 
@@ -1289,6 +1415,55 @@ function App() {
           >
             <X size={16} />
           </button>
+        </div>
+      )}
+      {roomEditor && (
+        <div className="modal-backdrop room-editor-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !roomSaveBusy) setRoomEditor(null); }}>
+          <section className="modal room-editor-modal" role="dialog" aria-modal="true" aria-label={roomEditor.id === undefined ? 'Add room' : 'Edit room'}>
+            <button className="modal-close" type="button" disabled={roomSaveBusy} onClick={() => setRoomEditor(null)} aria-label="Close room editor"><X /></button>
+            <div className="room-editor-heading">
+              <div className="eyebrow"><span /> ROOM MANAGEMENT</div>
+              <h2>{roomEditor.id === undefined ? 'Add a room.' : 'Edit room details.'}</h2>
+              <p>Keep the listing clear for guests. Rates are per night in Philippine pesos.</p>
+            </div>
+            <form className="room-editor-form" onSubmit={saveRoom}>
+              <div className="room-editor-grid">
+                <label>Room name
+                  <input required maxLength={80} value={roomEditor.name} onChange={event => setRoomEditor({...roomEditor, name: event.target.value})} placeholder="e.g. Deluxe Family Room" />
+                </label>
+                <label>Room type
+                  <select required value={roomEditor.type} onChange={event => setRoomEditor({...roomEditor, type: event.target.value})}>
+                    {['Standard', 'Deluxe', 'Family', 'Single', 'Suite', 'Twin', 'Other'].map(type => <option key={type}>{type}</option>)}
+                  </select>
+                </label>
+                <label>Nightly rate (PHP)
+                  <input required type="number" min="1" step="1" value={roomEditor.price} onChange={event => setRoomEditor({...roomEditor, price: event.target.value})} />
+                </label>
+                <label>Guest capacity
+                  <input required type="number" min="1" max="20" step="1" value={roomEditor.guests} onChange={event => setRoomEditor({...roomEditor, guests: event.target.value})} />
+                </label>
+                <label className="room-editor-full">Bed details
+                  <input required maxLength={120} value={roomEditor.beds} onChange={event => setRoomEditor({...roomEditor, beds: event.target.value})} placeholder="e.g. 2 single beds" />
+                </label>
+                <label className="room-editor-full">Photo URL
+                  <input type="url" value={roomEditor.image} onChange={event => setRoomEditor({...roomEditor, image: event.target.value})} placeholder="https://..." />
+                </label>
+                <label className="room-editor-full">Description
+                  <textarea rows={3} maxLength={500} value={roomEditor.description} onChange={event => setRoomEditor({...roomEditor, description: event.target.value})} placeholder="Describe the room and what makes it comfortable." />
+                </label>
+                <label className="room-editor-full">Amenities (separate with commas)
+                  <input value={roomEditor.amenities} onChange={event => setRoomEditor({...roomEditor, amenities: event.target.value})} placeholder="Wi-Fi, Air conditioning, Private bath" />
+                </label>
+              </div>
+              {roomEditor.image && <div className="room-editor-preview"><img src={roomEditor.image} alt="Room preview" onError={event => { event.currentTarget.style.visibility = 'hidden'; }} /><span><Check size={14} /> Image preview</span></div>}
+              <div className="room-editor-actions">
+                <button className="button button-outline" type="button" disabled={roomSaveBusy} onClick={() => setRoomEditor(null)}>Cancel</button>
+                <button className="button button-primary" type="submit" disabled={roomSaveBusy}>
+                  {roomSaveBusy ? <><RefreshCw size={14} className="spin-icon" /> Saving…</> : <><Save size={14} /> Save room</>}
+                </button>
+              </div>
+            </form>
+          </section>
         </div>
       )}
       {authMode && (
