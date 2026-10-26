@@ -68,7 +68,14 @@ export default async function handler(req: any, res: any) {
   const appsScriptUrl = env.APPS_SCRIPT_URL;
   const appsScriptSecret = env.APPS_SCRIPT_WEBHOOK_SECRET;
   if (!supabaseUrl || !anonKey || !serviceKey || !appsScriptUrl || !appsScriptSecret) {
-    return res.status(200).json({ configured: false, guestSent: false, staffSent: false, reason: 'Email sending is not fully configured.' });
+    const missing = [
+      !supabaseUrl && 'SUPABASE_URL',
+      !anonKey && 'SUPABASE_ANON_KEY',
+      !serviceKey && 'SUPABASE_SERVICE_ROLE_KEY',
+      !appsScriptUrl && 'APPS_SCRIPT_URL',
+      !appsScriptSecret && 'APPS_SCRIPT_WEBHOOK_SECRET',
+    ].filter(Boolean);
+    return res.status(200).json({ configured: false, guestSent: false, staffSent: false, reason: 'Missing Vercel environment variable(s): ' + missing.join(', ') });
   }
 
   const authorization = typeof req.headers?.authorization === 'string' ? req.headers.authorization : '';
@@ -121,12 +128,14 @@ export default async function handler(req: any, res: any) {
     const statusPart = statusLabel.toLowerCase().replace(/\s+/g, '_');
     const guestEventKey = event === 'booking_created' ? 'booking_created_guest' : 'status_' + statusPart + '_guest';
 
+    let failureReason = '';
     async function sendTrackedEmail(recipient: string, eventKey: string, subject: string, html: string): Promise<boolean> {
       const email = recipient.trim().toLowerCase();
-      if (!email) return false;
+      if (!email) { failureReason = 'The reservation has no guest email address.'; return false; }
       const { data: existing, error: lookupError } = await adminClient.from('email_delivery_logs')
         .select('id,status').eq('booking_id', booking.id).eq('event_key', eventKey).eq('recipient', email).maybeSingle();
       if (lookupError) {
+        failureReason = 'Could not read email delivery logs: ' + lookupError.message.slice(0, 220);
         console.error('Email delivery log lookup failed:', lookupError.message);
         return false;
       }
@@ -168,12 +177,16 @@ export default async function handler(req: any, res: any) {
         });
         providerData = await response.json().catch(() => ({}));
         if (!response.ok || providerData?.success !== true) {
-          const safeError = String(providerData?.error || 'Apps Script rejected the email request.').slice(0, 400);
+          const safeError = String(providerData?.error || (!response.ok
+            ? 'Google Apps Script returned HTTP ' + response.status + '. Check that the web app is deployed for access by Anyone.'
+            : 'Apps Script returned a non-JSON or unsuccessful response. Check its deployment and Executions log.')).slice(0, 400);
+          failureReason = safeError;
           await adminClient.from('email_delivery_logs').update({ status: 'failed', error_message: safeError }).eq('id', logId);
           return false;
         }
-      } catch {
-        await adminClient.from('email_delivery_logs').update({ status: 'failed', error_message: 'Could not connect to Google Apps Script.' }).eq('id', logId);
+      } catch (error: any) {
+        failureReason = 'Could not connect to Google Apps Script: ' + String(error?.message || 'network error').slice(0, 220);
+        await adminClient.from('email_delivery_logs').update({ status: 'failed', error_message: failureReason }).eq('id', logId);
         return false;
       }
       const { error: saveError } = await adminClient.from('email_delivery_logs')
@@ -191,7 +204,7 @@ export default async function handler(req: any, res: any) {
     // Apps Script sends the admin copy as part of the same reservation_created request.
     // Avoid a second webhook call, which would duplicate the guest and admin emails.
     const staffSent = event === 'booking_created' && Boolean(staffEmail) ? guestSent : false;
-    return res.status(200).json({ configured: true, guestSent, staffSent });
+    return res.status(200).json({ configured: true, guestSent, staffSent, ...(guestSent ? {} : { reason: failureReason || 'Email sending failed. Check the email delivery log and Apps Script Executions.' }) });
   } catch (error) {
     console.error('Reservation notification failed:', error);
     return res.status(500).json({ configured: true, guestSent: false, staffSent: false, error: 'Unable to process reservation email.' });
