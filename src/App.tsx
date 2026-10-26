@@ -12,11 +12,13 @@ import {
   DoorOpen,
   Filter,
   House,
-  Mail,
+
   MapPin,
   Menu,
   LogIn,
   LogOut,
+  Eye,
+  EyeOff,
   UserPlus,
   UserRound,
   Phone,
@@ -158,6 +160,8 @@ function App() {
   const [authForm, setAuthForm] = useState<AuthForm>({ name: '', email: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('All rooms');
   const [bookingRoom, setBookingRoom] = useState<Room | null>(null);
@@ -245,6 +249,8 @@ function App() {
   const openAuth = (mode: Exclude<AuthMode, null>) => {
     setAuthMode(mode);
     setAuthError('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
     setAuthForm({ name: currentUser?.name || '', email: currentUser?.email || '', password: '', confirmPassword: '' });
     setMenuOpen(false);
   };
@@ -396,8 +402,7 @@ function App() {
           <MapPin size={13} /> A quiet stay, a warm welcome
         </span>
         <span className="topline-right">
-          <Phone size={13} /> Reservations: Contact number not set{' '}
-          <span className="topline-dot">•</span> Open daily
+          Reservations welcome <span className="topline-dot">•</span> Open daily
         </span>
       </div>
       <header className="nav-wrap">
@@ -491,7 +496,7 @@ function App() {
                   Explore our rooms <ChevronRight size={17} />
                 </button>
                 <span className="hero-rating">
-                  <span className="stars">★★★★★</span>
+                  <span className="stars"><Sparkles size={14} /></span>
                   <span>Comfort you can count on</span>
                 </span>
               </div>
@@ -1007,10 +1012,7 @@ function App() {
               <MapPin size={15} /> Philippines
             </span>
             <span>
-              <Phone size={15} /> Contact number not set
-            </span>
-            <span>
-              <Mail size={15} /> Contact details not set
+              <CalendarDays size={15} /> Send reservation requests online
             </span>
           </div>
         </div>
@@ -1056,8 +1058,22 @@ function App() {
               <form className="auth-form" onSubmit={submitAuth}>
                 {authMode === 'register' && <label>Full name<input required autoComplete="name" value={authForm.name} onChange={event => setAuthForm({ ...authForm, name: event.target.value })} placeholder="Your full name" /></label>}
                 <label>Email address<input required type="email" autoComplete="email" value={authForm.email} onChange={event => setAuthForm({ ...authForm, email: event.target.value })} placeholder="you@example.com" /></label>
-                <label>Password<input required type="password" minLength={authMode === 'register' ? 8 : 1} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={authForm.password} onChange={event => setAuthForm({ ...authForm, password: event.target.value })} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Your password'} /></label>
-                {authMode === 'register' && <label>Confirm password<input required type="password" minLength={8} autoComplete="new-password" value={authForm.confirmPassword} onChange={event => setAuthForm({ ...authForm, confirmPassword: event.target.value })} placeholder="Enter your password again" /></label>}
+                <label>
+                  Password
+                  <div className="auth-password-input">
+                    <input required type={showPassword ? 'text' : 'password'} minLength={authMode === 'register' ? 8 : 1} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={authForm.password} onChange={event => setAuthForm({ ...authForm, password: event.target.value })} placeholder={authMode === 'register' ? 'At least 8 characters' : 'Your password'} />
+                    <button type="button" className="auth-password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                  </div>
+                </label>
+                {authMode === 'register' && (
+                  <label>
+                    Confirm password
+                    <div className="auth-password-input">
+                      <input required type={showConfirmPassword ? 'text' : 'password'} minLength={8} autoComplete="new-password" value={authForm.confirmPassword} onChange={event => setAuthForm({ ...authForm, confirmPassword: event.target.value })} placeholder="Enter your password again" />
+                      <button type="button" className="auth-password-toggle" onClick={() => setShowConfirmPassword(value => !value)} aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} title={showConfirmPassword ? 'Hide password' : 'Show password'}>{showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                    </div>
+                  </label>
+                )}
                 {authError && <p className="auth-error" role="alert">{authError}</p>}
                 <button className="button button-primary auth-submit" type="submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'login' ? 'Log in to your account' : 'Create account'}{!authBusy && <ChevronRight size={17} />}</button>
               </form>
@@ -1313,7 +1329,7 @@ function RoomCard({
         <div className="room-card-heading">
           <h3>{room.name}</h3>
           <div className="room-rating">
-            <Star size={13} fill="currentColor" /> <span>4.9</span>
+            <Star size={13} fill="currentColor" /> <span>Room highlight</span>
           </div>
         </div>
         <p>{room.description}</p>
