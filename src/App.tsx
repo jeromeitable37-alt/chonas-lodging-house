@@ -156,6 +156,7 @@ function App() {
   );
   const [users, setUsers] = useState<Account[]>(() => readStorage('chona-users', []));
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readStorage('chona-session', null));
+  const isAdmin = currentUser?.email?.toLowerCase() === 'deusboji@gmail.com';
   const [authMode, setAuthMode] = useState<AuthMode>(null);
   const [authForm, setAuthForm] = useState<AuthForm>({ name: '', email: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
@@ -254,7 +255,11 @@ function App() {
     setAuthForm({ name: currentUser?.name || '', email: currentUser?.email || '', password: '', confirmPassword: '' });
     setMenuOpen(false);
   };
-  const handleLogout = () => { setCurrentUser(null); setNotice('You have signed out.'); };
+  const handleLogout = () => {
+    setCurrentUser(null);
+    go('home');
+    setNotice('You have signed out.');
+  };
   const submitAuth = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!authMode) return;
@@ -447,17 +452,22 @@ function App() {
           >
             My reservations
           </button>
-          <button
-            className={view === 'admin' ? 'nav-link active' : 'nav-link'}
-            onClick={() => go('admin')}
-          >
-            Admin
-          </button>
+          {isAdmin && (
+            <button
+              className={view === 'admin' ? 'nav-link active' : 'nav-link'}
+              onClick={() => go('admin')}
+            >
+              Admin
+            </button>
+          )}
           {!currentUser ? (
-            <>
-              <button className="nav-link auth-nav-link" onClick={() => openAuth('login')}><LogIn size={14} /> Log in</button>
-              <button className="nav-link auth-nav-link auth-nav-register" onClick={() => openAuth('register')}><UserPlus size={14} /> Register</button>
-            </>
+            <button
+              className="nav-link auth-nav-link auth-nav-cta"
+              onClick={() => openAuth('login')}
+              aria-haspopup="dialog"
+            >
+              <UserRound size={14} /> Log in / Register
+            </button>
           ) : (
             <>
               <button className="nav-link auth-nav-link" onClick={() => go('mybookings')} title={currentUser.email}><UserRound size={14} /> {currentUser.name.split(' ')[0]}</button>
@@ -781,7 +791,7 @@ function App() {
         </main>
       )}
 
-      {view === 'admin' && (
+      {view === 'admin' && isAdmin && (
         <main className="admin-page">
           <div className="admin-heading">
             <div>

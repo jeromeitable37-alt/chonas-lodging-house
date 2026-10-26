@@ -1978,3 +1978,34 @@ h2 em {
 .room-rating span {
   white-space: nowrap;
 }
+
+/* Refined header account action: a single entry point for login and registration */
+.auth-nav-cta {
+  padding: 10px 13px !important;
+  border: 1px solid #dfe6dc !important;
+  border-radius: 4px !important;
+  background: #f1f5ee !important;
+  color: var(--green-dark) !important;
+  font-weight: 700 !important;
+  gap: 7px !important;
+  white-space: nowrap;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+.auth-nav-cta:hover {
+  border-color: #c8d5c8 !important;
+  background: #e6eee2 !important;
+  transform: translateY(-1px);
+}
+.auth-nav-cta:focus-visible {
+  outline: 3px solid #d7b77f;
+  outline-offset: 2px;
+}
+@media (max-width: 720px) {
+  .auth-nav-cta {
+    justify-content: flex-start !important;
+    width: 100%;
+    padding: 12px 8px !important;
+    border-radius: 3px !important;
+  }
+}
+
